@@ -1,0 +1,11 @@
+fastapi
+pydantic
+uvicorn
+ollama
+numpy
+faiss-cpu
+rank-bm25
+streamlit
+requests
+nbformat
+python-dotenv

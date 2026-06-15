@@ -1,0 +1,213 @@
+{
+	"info": {
+		"_postman_id": "context-assist-api-collection",
+		"name": "Project Context AI API",
+		"description": "Complete API collection for Project Context AI - RAG-based repository querying system",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/health",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"health"
+					]
+				},
+				"description": "Check if the server is running and healthy"
+			},
+			"response": [
+				{
+					"name": "Success",
+					"originalRequest": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"health"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"body": "{\n    \"status\": \"ok\",\n    \"service\": \"Project Context AI\",\n    \"mode\": \"development\"\n}"
+				}
+			]
+		},
+		{
+			"name": "Debug State",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/debug/state",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"debug",
+						"state"
+					]
+				},
+				"description": "Get information about indexed repositories and system state"
+			},
+			"response": []
+		},
+		{
+			"name": "Index Repository",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"repo_id\": \"pocket_money\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/index",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"index"
+					]
+				},
+				"description": "Index a repository for RAG queries. The repo_id should match a folder name in your workspace root."
+			},
+			"response": []
+		},
+		{
+			"name": "Ask Question",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"session_id\": \"chat1\",\n    \"user\": \"What is this project about?\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/ask",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"ask"
+					]
+				},
+				"description": "Ask a question. If multiple repositories match, the system will return available_repos list. Simply type your question or repository name in the 'user' field."
+			},
+			"response": []
+		},
+		{
+			"name": "Select Repository (Follow-up)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"session_id\": \"chat1\",\n    \"user\": \"sentiment-analysis\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/ask",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"ask"
+					]
+				},
+				"description": "After receiving available_repos list, simply type the repository name (e.g., 'sentiment-analysis') in the 'user' field. The system will answer your original question using that repository."
+			},
+			"response": []
+		},
+		{
+			"name": "Ask Question (With Sources)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"session_id\": \"chat2\",\n    \"user\": \"How does the authentication work?\",\n    \"show_sources\": true,\n    \"show_confidence\": true\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/ask",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"ask"
+					]
+				},
+				"description": "Ask a question with sources and confidence score included in the response. Just type your question naturally in the 'user' field."
+			},
+			"response": []
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		}
+	]
+}

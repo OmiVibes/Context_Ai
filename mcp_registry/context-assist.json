@@ -1,0 +1,5 @@
+{
+  "id": "context-assist",
+  "description": "Talk to repos using Context Assist MCP",
+  "url": "ws://localhost:5173"
+}

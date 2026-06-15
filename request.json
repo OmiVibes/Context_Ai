@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "method": "call/ask_project",
+  "params": {
+    "question": "What does this project do?",
+    "show_sources": true,
+    "show_confidence": true
+  }
+}
