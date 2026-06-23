@@ -2,6 +2,7 @@ import sys
 import os
 import asyncio
 import json
+from contextlib import redirect_stdout
 from urllib.parse import urlparse
 
 # -------------------------------------------------
@@ -259,7 +260,8 @@ async def main():
 
     try:
         request = json.loads(raw_input)
-        response = await handle_request(request)
+        with redirect_stdout(sys.stderr):
+            response = await handle_request(request)
 
         reply = {
             "jsonrpc": "2.0",

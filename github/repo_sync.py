@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 # -------------------------------------------------
 # CONFIG
@@ -53,19 +54,24 @@ def sync_repo(repo_url: str, repo_name: str) -> str:
         # PULL (if repo exists)
         # ---------------------------------
         else:
-            subprocess.run(
-                ["git", "-C", local_repo_path, "fetch", "origin"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
+            try:
+                subprocess.run(
+                    ["git", "-C", local_repo_path, "fetch", "origin"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True,
+                )
 
-            subprocess.run(
-                ["git", "-C", local_repo_path, "reset", "--hard", "origin/HEAD"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
+                subprocess.run(
+                    ["git", "-C", local_repo_path, "reset", "--hard", "origin/HEAD"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True,
+                )
+            except subprocess.CalledProcessError:
+                # Keep the existing local clone usable when offline or when
+                # the remote is temporarily unavailable.
+                pass
 
     except subprocess.CalledProcessError as e:
         # IMPORTANT: raise error, but DO NOT print
@@ -81,8 +87,8 @@ def sync_repo(repo_url: str, repo_name: str) -> str:
                 try:
                     file_path = os.path.join(root, file)
                     os.remove(file_path)
-                    print(f"[*] Removed documentation file: {file_path}")
+                    print(f"[*] Removed documentation file: {file_path}", file=sys.stderr)
                 except Exception as e:
-                    print(f"[!] Could not remove {file_path}: {e}")
+                    print(f"[!] Could not remove {file_path}: {e}", file=sys.stderr)
 
     return local_repo_path
