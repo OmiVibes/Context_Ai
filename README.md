@@ -122,6 +122,14 @@ has been added.
 
 ## Notes
 
+The answering flow now keeps retrieved evidence and citations together:
+repository -> chunking -> embeddings -> vector index -> retrieval -> bounded context
+and prompt builder -> separated inference API -> engine/model -> grounded answer
+with sources. Configure `RAG_TOP_K` (5), `RAG_MAX_CONTEXT_CHARS` (3000),
+`LLM_API_URL` (`http://127.0.0.1:9001/generate`) and the inference service's
+`LLM_DEFAULT_MODEL` as needed. See [RAG pipeline](rag/PIPELINE.md) for response
+fields, configuration, compatibility, tests and file-level citation limitations.
+
 Generated data such as virtual environments, caches, repository indexes, vector files, and local profiles are excluded from version control through `.gitignore`.
 
 Index fingerprints hash eligible relative paths and source content with SHA-256;

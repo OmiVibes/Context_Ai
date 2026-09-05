@@ -13,23 +13,7 @@ from utils.repo_paths import validate_repo_id, repo_path as safe_repo_path, cont
 from app_processing.embeddings import embed_query
 from vector_store.store import VectorStore
 from rag.repo_structure import infer_architecture
-from rag.prompt_builder import build_user_prompt
-
-# -------------------------------------------------
-# SYSTEM PROMPT (SINGLE SOURCE OF TRUTH)
-# -------------------------------------------------
-SYSTEM_PROMPT = """
-You are a repository-grounded assistant.
-
-STRICT RULES (must follow):
-- Answer ONLY using facts explicitly present in the provided context.
-- Do NOT rephrase or summarize beyond what is written.
-- Do NOT add adjectives like "high accuracy", "instant", "powerful", etc unless they appear verbatim.
-- If the answer is not directly stated, say:
-  "I could not find this information in the repository."
-- Do NOT use general knowledge about the topic.
-- Be factual and literal.
-"""
+from rag.grounded import answer_from_results, positive_int
 
 # -------------------------------------------------
 # 🔐 GLOBAL REGISTRIES (MULTI-REPO SAFE)
@@ -220,7 +204,7 @@ def rag_answer(
                     vector_store.search(
                         query_embedding=emb,
                         query_text=qv,
-                        top_k=5,
+                        top_k=positive_int("RAG_TOP_K", 5),
                         threshold=0.25,
                     )
                 )
@@ -237,62 +221,8 @@ def rag_answer(
             "confidence": "Low",
         }
 
-    # Deduplicate
-    seen = set()
-    results = []
-    for r in all_results:
-        key = r["text"].strip()
-        if key not in seen:
-            seen.add(key)
-            results.append(r)
-
-    # ---------------------------------------------
-    # 🚫 NO EVIDENCE → HARD STOP (NO LLM)
-    # ---------------------------------------------
-    if not results:
-        return {
-            "answer": "I could not find this information in the repository.",
-            "confidence": "Low",
-        }
-
-    # ---------------------------------------------
-    # ✅ EVIDENCE EXISTS → LLM ALLOWED
-    # ---------------------------------------------
-    try:
-        MAX_CONTEXT_CHARS = 3000  # hard safety limit
-
-        raw_context = "\n\n".join(r["text"] for r in results)
-
-        # 🔒 hard truncate context (MOST IMPORTANT FIX)
-        context = raw_context[:MAX_CONTEXT_CHARS]
-
-        print(f"[RAG] Context truncated to {len(context)} characters")
-
-        user_prompt = build_user_prompt(question, context)
-
-        answer = generate_answer(user_prompt)
-    except InferenceError:
-        raise
-    except Exception as e:
-        raise InferenceError("inference_failure", "Unexpected inference service failure", 500) from e
-    confidence = compute_confidence(results)
-
-    final = {"answer": answer}
-
-    if show_confidence:
-        final["confidence"] = confidence
-
-    if show_sources:
-        final["sources"] = [
-            {
-                "file": r["metadata"].get("file_path"),
-                "section": r["metadata"].get("section"),
-                "score": r["score"],
-            }
-            for r in results
-        ]
-
-    return final
+    return answer_from_results(question, all_results, [repo_id], generate_answer,
+                               show_confidence, compute_confidence)
 
 # -------------------------------------------------
 # 🔄 MULTI-REPO RAG (FOR FRONTEND/BACKEND GROUPS)
@@ -358,13 +288,12 @@ def rag_answer_multi_repo(
                     results = vector_store.search(
                         query_embedding=emb,
                         query_text=qv,
-                        top_k=5,
+                        top_k=positive_int("RAG_TOP_K", 5),
                         threshold=0.25,
                     )
                     # Add repo_id to metadata for tracking
                     for r in results:
-                        r["repo_id"] = repo_id
-                        all_results.append(r)
+                        all_results.append({**r, "repo_id": repo_id})
                 except InferenceError:
                     raise
                 except Exception as e:
@@ -378,69 +307,8 @@ def rag_answer_multi_repo(
             "confidence": "Low",
         }
 
-    # Deduplicate results (same text from different repos)
-    seen = set()
-    results = []
-    for r in all_results:
-        key = r["text"].strip()
-        if key not in seen:
-            seen.add(key)
-            results.append(r)
-    
-    # Sort by score (best results first)
-    results.sort(key=lambda x: x["score"], reverse=True)
-    # Take top 10 results across all repos
-    results = results[:10]
-    
-    if not results:
-        return {
-            "answer": f"I could not find this information across the repositories: {', '.join(repo_ids)}.",
-            "confidence": "Low",
-        }
-    
-    # Generate answer from combined context
-    try:
-        # Add repo context to the prompt
-        repos_context = ", ".join(repo_ids)
-        context = "\n\n".join([
-            f"[From {r['repo_id']}]: {r['text']}" 
-            for r in results
-        ])
-        
-        user_prompt = f"""This question is about a project that spans multiple repositories: {repos_context}
-
-QUESTION:
-{question}
-
-CONTEXT FROM REPOSITORIES:
-{context}
-
-Please provide a comprehensive answer based on information from across all these repositories."""
-
-        answer = generate_answer(user_prompt)
-    except InferenceError:
-        raise
-    except Exception as e:
-        raise InferenceError("inference_failure", "Unexpected inference service failure", 500) from e
-    confidence = compute_confidence(results)
-    
-    final = {"answer": answer}
-    
-    if show_confidence:
-        final["confidence"] = confidence
-    
-    if show_sources:
-        final["sources"] = [
-            {
-                "repo_id": r["repo_id"],
-                "file": r["metadata"].get("file_path"),
-                "section": r["metadata"].get("section"),
-                "score": r["score"],
-            }
-            for r in results
-        ]
-    
-    return final
+    return answer_from_results(question, all_results, repo_ids, generate_answer,
+                               show_confidence, compute_confidence)
 
 
 # -------------------------------------------------

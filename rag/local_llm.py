@@ -10,7 +10,7 @@ LLM_API_URL = "http://127.0.0.1:9001/generate"
 
 def generate_answer(prompt: str) -> str:
     try:
-        response = requests.post(LLM_API_URL, json={"prompt": prompt},
+        response = requests.post(os.getenv("LLM_API_URL", LLM_API_URL), json={"prompt": prompt},
             timeout=float(os.getenv("LLM_CLIENT_TIMEOUT_SECONDS", "270")))
         if response.status_code >= 400:
             status = response.status_code if response.status_code in (500, 503, 504) else 500
