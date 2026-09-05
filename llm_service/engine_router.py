@@ -1,4 +1,4 @@
-from engines.ollama import OllamaEngine
+from llm_service.engines.ollama import OllamaEngine
 
 def get_engine(engine: str = "ollama", model: str = "mistral"):
     if engine == "ollama":

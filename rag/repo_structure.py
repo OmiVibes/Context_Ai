@@ -1,41 +1,26 @@
 import os
+from pathlib import Path
+from app_processing.file_loader import ALLOWED_EXTENSIONS, EXCLUDE_DIRS
 
-IGNORE = {"__pycache__", "venv", ".git"}
 
 def summarize_structure(base_path):
+    base = Path(base_path).resolve()
+    if not base.is_dir():
+        return ""
     lines = []
-    for root, dirs, files in os.walk(base_path):
-        if any(ig in root for ig in IGNORE):
-            continue
-        level = root.replace(base_path, "").count(os.sep)
-        indent = "  " * level
-        folder = os.path.basename(root)
-        lines.append(f"{indent}- {folder}/")
-        for f in files:
-            if f.endswith((".py", ".md", ".yaml", ".json")):
-                lines.append(f"{indent}  - {f}")
+    for root, dirs, files in os.walk(base):
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS
+                         and (Path(root) / d).resolve().is_relative_to(base))
+        for name in sorted(files):
+            path = Path(root) / name
+            if path.suffix.lower() in ALLOWED_EXTENSIONS and path.resolve().is_relative_to(base):
+                lines.append("- " + path.relative_to(base).as_posix())
     return "\n".join(lines)
 
 
 def infer_architecture(base_path):
     structure = summarize_structure(base_path)
-
-    return f"""
-Below is an inferred overview of how the project is structured based on its repository contents.
-This answer is based ONLY on what exists inside the repository.
-
-📌 Possible Architecture Components:
-- **Data / Input Layer** – Handles dataset loading, preprocessing, or input files
-- **Model / Algorithm Layer** – Neural network definition, training logic, inference code
-- **Evaluation / Visualization** – Metrics, charts, Grad-CAM heatmaps, UI notebooks
-- **Prediction Interface** – API, Streamlit, CLI, or notebook used to run predictions
-
-📌 Likely Workflow (based on common ML repo patterns):
-1. Load and preprocess input images
-2. Feed data to the trained CNN model
-3. Generate classification (tumor vs. non-tumor)
-4. Visualize or return predictions
-
-📁 Repository Structure Snapshot:
-{structure}
-""".strip()
+    if not structure:
+        return "I could not find sufficient repository evidence to describe its architecture."
+    return ("Observed source/configuration files:\n" + structure
+            + "\n\nFile names alone are insufficient evidence to infer component responsibilities or data flow.")

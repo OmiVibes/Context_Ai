@@ -3,6 +3,7 @@ import re
 import nbformat
 import unicodedata
 import math
+from pathlib import Path
 
 # ADD THESE IMPORTS (NEW ⭐)
 from .file_reader import read_markdown_file, read_file
@@ -203,9 +204,11 @@ def load_repo_files(repo_path: str) -> list[dict]:
     # Skip REPO_MANIFEST.md - it's documentation, not code
     # Focus on actual code files only
 
-    # Walk repo and apply enhanced guards
+    # Do not read source through symlinks or Windows junctions outside this repo.
+    canonical_root = Path(repo_path).resolve()
     for root, dirs, files in os.walk(repo_path):
-        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS
+                   and (Path(root) / d).resolve().is_relative_to(canonical_root)]
 
         for file in files:
             # Skip documentation files - focus on code only
@@ -223,6 +226,8 @@ def load_repo_files(repo_path: str) -> list[dict]:
                 continue
 
             path = os.path.join(root, file)
+            if not Path(path).resolve().is_relative_to(canonical_root):
+                continue
             rel_path = path.replace(repo_path, "").lstrip(os.sep)
 
             # Skip secret or binary file types

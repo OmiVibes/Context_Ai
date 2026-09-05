@@ -1,7 +1,8 @@
 import os
 import json
 import subprocess
-import shutil
+from pathlib import Path
+from github.repo_sync import sync_repo as sync_managed_repo
 import ollama
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
@@ -137,63 +138,12 @@ def safe_commit():  # ⭐ NEW
 # REPO SYNC (CLONE OR UPDATE WITH FAILSAFE)
 # -------------------------------------------------
 def sync_repo():
-    # ---------------------------------
-    # If repo folder exists but invalid
-    # ---------------------------------
-    if os.path.exists(REPO_PATH) and not repo_is_valid():
-        print("⚠️ Detected corrupted or partially cloned repo!")
-        print("🗑 Removing invalid repo...")
-        try:
-            shutil.rmtree(REPO_PATH)
-        except Exception as e:
-            print("❌ Failed to remove corrupted repo:", e)
+    return sync_managed_repo(
+        GITHUB_REPO_URL, Path(REPO_PATH).name,
+        repo_root=Path(REPO_PATH).parent, branch=GITHUB_BRANCH,
+    )
 
-    # ---------------------------------
-    # Clone if missing
-    # ---------------------------------
-    if not os.path.exists(REPO_PATH):
-        print("📥 Repository not present — cloning fresh...")
 
-        for attempt in range(1, 4):  # retry 3 times
-            print(f"🔁 Clone attempt {attempt}...")
-            try:
-                subprocess.check_call(
-                    ["git", "clone", "--branch", GITHUB_BRANCH, GITHUB_REPO_URL, REPO_PATH]
-                )
-                if repo_is_valid():
-                    print("✅ Clone succeeded")
-                    break
-            except Exception as e:
-                print(f"❌ Clone failed: {e}")
-
-            if attempt == 3:
-                raise RuntimeError("🚨 Git clone failed after 3 attempts!")
-
-        return
-
-    # ---------------------------------
-    # Repo exists & is valid — pull
-    # ---------------------------------
-    print("🔄 Repository exists — syncing with GitHub")
-
-    try:
-        subprocess.check_call(["git", "fetch", "origin"], cwd=REPO_PATH)
-        subprocess.check_call(
-            ["git", "reset", "--hard", f"origin/{GITHUB_BRANCH}"],
-            cwd=REPO_PATH
-        )
-    except Exception as e:
-        print("❌ Git sync failed:", e)
-        print("⚠️ Removing repo and retrying...")
-        shutil.rmtree(REPO_PATH)
-        return sync_repo()
-
-    commit = safe_commit()  # ⭐ changed
-    print(f"✅ Repository synced to commit: {commit}")
-
-# -------------------------------------------------
-# INDEX BUILDER (WITH CHUNK PRINTING 🔥)
-# -------------------------------------------------
 def build_index():
     global vector_store, MANIFEST, PROJECT_PROFILE
 

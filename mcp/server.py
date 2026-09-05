@@ -3,6 +3,7 @@ import os
 import asyncio
 import json
 from contextlib import redirect_stdout
+from pydantic import ValidationError
 from urllib.parse import urlparse
 
 # -------------------------------------------------
@@ -15,6 +16,8 @@ if PROJECT_ROOT not in sys.path:
 # -------------------------------------------------
 # CORE IMPORTS (NO app.py)
 # -------------------------------------------------
+from utils.errors import ServiceError
+from utils.repo_paths import validate_repo_id, repo_path as safe_repo_path, contained_path
 from rag.core import rag_answer, register_repo
 from rag.milestones import list_milestones
 from rag.risk import detect_risks
@@ -43,6 +46,21 @@ from mcp.schemas import (
 # -------------------------------------------------
 router = RouterAgent()
 
+SUPPORTED_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
+TOOL_SCHEMAS = {
+    "ask_project": (AskRequest, "Answer a question using the selected repository"),
+    "list_milestones": (ListMilestonesRequest, "List milestones inferred from GitHub issues"),
+    "risk_summary": (RiskSummaryRequest, "Summarize risks from GitHub issues"),
+    "rebuild_index": (ReindexRequest, "Safely sync and index a repository"),
+}
+
+
+class ProtocolError(ValueError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 # -------------------------------------------------
 # HELPER: EXTRACT OWNER FROM GITHUB URL
 # -------------------------------------------------
@@ -58,7 +76,7 @@ def extract_repo_owner(repo_url: str):
 # -------------------------------------------------
 def index_agent(req: ReindexRequest):
     repo_url = req.repo_url
-    repo_id = req.repo_id
+    repo_id = validate_repo_id(req.repo_id) if req.repo_id else None
 
     if not repo_url or not repo_id:
         raise ValueError("repo_id and repo_url are required")
@@ -73,7 +91,7 @@ def index_agent(req: ReindexRequest):
         repo_url=repo_url,
     )
 
-    profile_path = os.path.join("repo_profiles", f"{repo_id}.json")
+    profile_path = str(contained_path("repo_profiles", f"{repo_id}.json"))
     if not os.path.exists(profile_path):
         raise RuntimeError("Repo profile was not created")
 
@@ -103,7 +121,7 @@ def index_agent(req: ReindexRequest):
         INDICES_STORE_DIR = os.path.join(PROJECT_ROOT, "indices_store")
         os.makedirs(INDICES_STORE_DIR, exist_ok=True)
         
-        repo_indices_dir = os.path.join(INDICES_STORE_DIR, repo_id)
+        repo_indices_dir = str(safe_repo_path(INDICES_STORE_DIR, repo_id))
         os.makedirs(repo_indices_dir, exist_ok=True)
         
         # Get unique files from metadata
@@ -140,7 +158,7 @@ def index_agent(req: ReindexRequest):
             "accuracy": accuracy
         }
         
-        indices_file_path = os.path.join(repo_indices_dir, "indices.json")
+        indices_file_path = str(contained_path(repo_indices_dir, "indices.json"))
         with open(indices_file_path, "w", encoding="utf-8") as f:
             json.dump(indices_snapshot, f, indent=2)
     except Exception as e:
@@ -169,19 +187,37 @@ async def handle_request(request: dict):
     # -----------------------------
     # Tool discovery
     # -----------------------------
+    if method == "initialize":
+        version = params.get("protocolVersion")
+        if not isinstance(version, str) or not isinstance(params.get("capabilities"), dict) or not isinstance(params.get("clientInfo"), dict):
+            raise ProtocolError(-32602, "Invalid initialization parameters")
+        return {"protocolVersion": version if version in SUPPORTED_VERSIONS else SUPPORTED_VERSIONS[-1],
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "context-assist", "version": "1.0.0"}}
+    if method in ("ping", "notifications/initialized", "notifications/cancelled"):
+        return {}
     if method == "tools/list":
-        return {
-            "tools": [
-                {"name": "ask_project", "agent": "RouterAgent"},
-                {"name": "list_milestones", "agent": "PlanningAgent"},
-                {"name": "risk_summary", "agent": "RiskAgent"},
-                {"name": "rebuild_index", "agent": "IndexAgent"},
-            ]
-        }
+        return {"tools": [{"name": name, "description": description, "inputSchema": schema.model_json_schema()}
+                          for name, (schema, description) in TOOL_SCHEMAS.items()]}
+    if method == "tools/call":
+        name = params.get("name")
+        if not isinstance(name, str) or name not in TOOL_SCHEMAS:
+            raise ProtocolError(-32602, "Unknown tool name")
+        arguments = params.get("arguments", {})
+        if not isinstance(arguments, dict):
+            raise ProtocolError(-32602, "Tool arguments must be an object")
+        # Validate before execution; runtime tool failures use isError.
+        TOOL_SCHEMAS[name][0](**arguments)
+        try:
+            result = await handle_request({"method": "call/" + name, "params": arguments})
+            return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": False}
+        except ServiceError as exc:
+            return {"content": [{"type": "text", "text": json.dumps(exc.detail())}], "isError": True}
+        except ValueError as exc:
+            raise ProtocolError(-32602, str(exc)) from exc
+        except Exception:
+            return {"content": [{"type": "text", "text": "Tool execution failed; check repository state and service configuration"}], "isError": True}
 
-    # -----------------------------
-    # Routed project questions
-    # -----------------------------
     if method == "call/ask_project":
         req = AskRequest(**params)
 
@@ -248,37 +284,57 @@ async def handle_request(request: dict):
         req = ReindexRequest(**params)
         return index_agent(req)
 
-    return {"error": f"Unknown method '{method}'"}
+    raise ProtocolError(-32601, "Method not found")
 
 # -------------------------------------------------
 # ✅ ONE-SHOT MCP ENTRYPOINT (STREAMLIT SAFE)
 # -------------------------------------------------
-async def main():
-    raw_input = sys.stdin.read().strip()
-    if not raw_input:
-        return
-
+async def process_message(raw: str):
+    request_id = None
+    notification = False
     try:
-        request = json.loads(raw_input)
+        try:
+            request = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ProtocolError(-32700, "Parse error") from exc
+        if not isinstance(request, dict) or request.get("jsonrpc") != "2.0" or not isinstance(request.get("method"), str):
+            raise ProtocolError(-32600, "Invalid Request")
+        request_id = request.get("id")
+        if request_id is not None and (not isinstance(request_id, (str, int)) or isinstance(request_id, bool)):
+            request_id = None
+            raise ProtocolError(-32600, "Invalid request ID")
+        notification = "id" not in request
+        if not isinstance(request.get("params", {}), dict):
+            raise ProtocolError(-32602, "Parameters must be an object")
+        # Notifications never invoke mutation/query tools and never receive replies.
+        if notification:
+            return None
         with redirect_stdout(sys.stderr):
-            response = await handle_request(request)
+            result = await handle_request(request)
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+    except ProtocolError as exc:
+        error = {"code": exc.code, "message": str(exc)}
+    except ValidationError:
+        error = {"code": -32602, "message": "Invalid tool parameters"}
+    except ValueError as exc:
+        error = {"code": -32602, "message": str(exc)}
+    except ServiceError as exc:
+        error = {"code": -32000, "message": str(exc), "data": {"status": exc.status_code, **exc.detail()}}
+    except Exception:
+        error = {"code": -32603, "message": "Tool execution failed; check repository state and service configuration"}
+    return None if notification else {"jsonrpc": "2.0", "id": request_id, "error": error}
 
-        reply = {
-            "jsonrpc": "2.0",
-            "id": request.get("id"),
-            "result": response,
-        }
 
-        sys.stdout.write(json.dumps(reply))
-        sys.stdout.flush()
+async def main():
+    # Newline-delimited stdio also accepts the existing one-shot payload at EOF.
+    for raw in sys.stdin:
+        if not raw.strip():
+            continue
+        reply = await process_message(raw)
+        if reply is not None:
+            sys.stdout.write(json.dumps(reply) + "\n")
+            sys.stdout.flush()
 
-    except Exception as e:
-        sys.stdout.write(json.dumps({
-            "jsonrpc": "2.0",
-            "id": None,
-            "error": str(e),
-        }))
-        sys.stdout.flush()
 
 if __name__ == "__main__":
     asyncio.run(main())

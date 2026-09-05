@@ -1,21 +1,23 @@
+from typing import Optional
 from fastapi import FastAPI
-from pydantic import BaseModel
-from core import run_inference
+from pydantic import BaseModel, Field
+from llm_service.core import run_inference
+from utils.errors import InferenceError, install_error_handlers
 
 app = FastAPI(title="LLM Inference Service")
+install_error_handlers(app)
+
 
 class GenerateRequest(BaseModel):
-    prompt: str
-    model: str = "qwen2.5:7b"
+    prompt: str = Field(min_length=1)
+    model: Optional[str] = Field(default=None, min_length=1)
+
 
 @app.post("/generate")
 def generate(req: GenerateRequest):
     try:
-        answer = run_inference(
-            prompt=req.prompt,
-            model=req.model
-        )
+        return {"answer": run_inference(prompt=req.prompt, model=req.model)}
+    except InferenceError:
+        raise
     except Exception as exc:
-        answer = f"Error generating answer: {exc}"
-
-    return {"answer": answer}
+        raise InferenceError("inference_failure", "Unexpected inference engine failure", 500) from exc

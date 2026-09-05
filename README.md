@@ -8,7 +8,7 @@ Context AI is a local developer assistant that indexes software repositories and
 - Generate embeddings and store vectors with FAISS
 - Ask natural-language questions about indexed codebases
 - Expose context tools through an MCP server
-- Use FastAPI endpoints for indexing, querying, risks, milestones, and metrics
+- Use FastAPI endpoints for indexing and querying; MCP tools for risks and milestones
 - Provide a Streamlit interface for repository chat workflows
 - Route prompts to local LLM backends such as Ollama
 
@@ -45,10 +45,14 @@ Create a `.env` file for local configuration if needed. The `.env` file is inten
 ## Run The API
 
 ```bash
-uvicorn app:app --reload
+uvicorn app:app --host 127.0.0.1 --port 8000 --lifespan off
 ```
 
 The main API starts from `app.py` and exposes repository indexing and RAG query endpoints.
+`--lifespan off` disables automatic workspace indexing. Submit `/index` explicitly.
+Indexing preserves source and documentation files. Repository IDs are single names,
+not paths. Git sync refuses dirty repositories, divergent histories, or updates that
+remove files; it never resets local changes. Apply such updates manually after review.
 
 ## Run The Streamlit UI
 
@@ -61,10 +65,60 @@ Use the sidebar to provide a repository ID and GitHub repository URL, rebuild th
 ## Run The LLM Service
 
 ```bash
-uvicorn llm_service.server:app --reload
+uvicorn llm_service.server:app --host 127.0.0.1 --port 9001
 ```
 
 The LLM service routes prompts to a configured local model backend.
+
+Set configuration in the ignored root `.env` or the process environment:
+
+```dotenv
+LLM_DEFAULT_MODEL=qwen2.5:7b
+# Optional: choose an already installed local model suitable for your memory.
+# LLM_FALLBACK_MODEL=llama3.2:1b
+LLM_TIMEOUT_SECONDS=120
+LLM_CLIENT_TIMEOUT_SECONDS=270
+```
+
+The original default is retained. On this audit machine, `llama3.2:1b` worked where
+`qwen2.5:7b` could not load. The fallback is disabled unless configured. It runs only
+after model-unavailable or insufficient-memory failures and only if installed
+locally; it never downloads a model or selects a cloud model. An explicit `model`
+in `/generate` is always honored and disables fallback for that request.
+
+Inference failures return `{"detail":{"code":"...","message":"..."}}` with
+503 for unavailable models/services or memory limits, 504 for timeouts, and 500
+for unexpected failures. `/ask` propagates these statuses instead of returning an
+error as an answer. Keep the client timeout above two engine attempts plus model
+discovery time if fallback is enabled. Restart services after changing configuration.
+
+GitHub Milestones/Risks require `GITHUB_TOKEN` with access to the selected repository.
+Missing/invalid tokens produce clear configuration errors; they are never printed
+or committed, and invalid authentication is not retried anonymously. `/health/github`
+reports configuration presence only, not token validity. The UI derives owner/name
+from the entered GitHub URL.
+
+MCP supports newline-delimited stdio `initialize`, `ping`, `tools/list`, `tools/call`,
+and notifications, while retaining existing `call/ask_project`, `call/rebuild_index`,
+`call/list_milestones`, and `call/risk_summary`. One-shot requests at EOF still work.
+Errors now use JSON-RPC error objects with the original request ID. Standard tool
+execution failures use `isError` content. Protocol references:
+[lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle),
+[tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools),
+[stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+
+Run deterministic regression tests without a live model or GitHub credentials:
+
+```powershell
+.\venv\Scripts\python.exe -X utf8 -m unittest discover -s tests -v
+```
+
+The integration audit commands and remaining limitations are documented in
+`audit/PROJECT_AUDIT.md`. Architecture responses list observed repository files
+and explicitly state that file names alone cannot establish responsibilities or
+data flow. Sessions remember an explicitly selected repository in memory, allow
+explicit switching, and replace stale pending questions; no persistent chat storage
+has been added.
 
 ## Notes
 

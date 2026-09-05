@@ -1,7 +1,10 @@
 # context_assist/mcp/schemas.py
 
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, AfterValidator
+from typing import Annotated, List, Optional
+from utils.repo_paths import validate_repo_id
+
+RepoId = Annotated[str, AfterValidator(validate_repo_id)]
 
 
 # ----------------------------
@@ -10,7 +13,7 @@ from typing import List, Optional
 
 class AskRequest(BaseModel):
     question: str
-    repo_id: Optional[str] = None  # ✅ NEW (multi-repo support)
+    repo_id: Optional[RepoId] = None
     show_sources: bool = False
     show_confidence: bool = False
 
@@ -22,7 +25,7 @@ class AskResponse(BaseModel):
 
 
 class ReindexRequest(BaseModel):
-    repo_id: Optional[str] = None
+    repo_id: Optional[RepoId] = None
     repo_url: Optional[str] = None
 
 

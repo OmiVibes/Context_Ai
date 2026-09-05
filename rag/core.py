@@ -5,6 +5,9 @@ import json
 from typing import Dict, Any, List, Optional
 
 from rag.local_llm import generate_answer
+from utils.questions import is_generic_question, greeting_answer
+from utils.errors import InferenceError
+from utils.repo_paths import validate_repo_id, repo_path as safe_repo_path, contained_path
 
 
 from app_processing.embeddings import embed_query
@@ -62,11 +65,12 @@ def load_repo_from_disk(repo_id: str) -> Optional[VectorStore]:
 # LOAD REPO PROFILE FROM DISK
 # -------------------------------------------------
 def load_repo_profile(repo_id: str) -> Optional[Dict[str, Any]]:
+    repo_id = validate_repo_id(repo_id)
     # Try new path structure first: repo_profiles/{repo_id}/profile.json
-    path = os.path.join("repo_profiles", repo_id, "profile.json")
+    path = str(contained_path(safe_repo_path("repo_profiles", repo_id), "profile.json"))
     if not os.path.exists(path):
         # Fallback to old path: repo_profiles/{repo_id}.json
-        path = os.path.join("repo_profiles", f"{repo_id}.json")
+        path = str(contained_path("repo_profiles", f"{repo_id}.json"))
         if not os.path.exists(path):
             return None
 
@@ -87,6 +91,7 @@ def rag_answer(
     show_confidence: bool = False,
 ) -> Dict[str, Any]:
 
+    repo_id = validate_repo_id(repo_id)
     question = question.strip()
     q_lower = question.lower().strip()
     
@@ -112,7 +117,7 @@ def rag_answer(
                 app_module = sys.modules['app']
                 workspace_root = getattr(app_module, 'WORKSPACE_ROOT', None)
                 if workspace_root:
-                    repo_path = os.path.join(workspace_root, repo_id)
+                    repo_path = str(safe_repo_path(workspace_root, repo_id))
                     if not os.path.exists(repo_path):
                         repo_path = None
         except Exception:
@@ -121,13 +126,13 @@ def rag_answer(
         # Fallback to common locations if workspace_root not found
         if not repo_path:
             possible_paths = [
-                os.path.join("repos", repo_id),
-                os.path.join(os.path.dirname(os.path.dirname(__file__)), "repos", repo_id),
+                str(safe_repo_path("repos", repo_id)),
+                str(safe_repo_path(os.path.join(os.path.dirname(os.path.dirname(__file__)), "repos"), repo_id)),
             ]
             
             # Also check parent directory (workspace root)
             parent_dir = os.path.dirname(os.path.dirname(__file__))
-            workspace_repo_path = os.path.join(os.path.dirname(parent_dir), repo_id)
+            workspace_repo_path = str(safe_repo_path(os.path.dirname(parent_dir), repo_id))
             possible_paths.append(workspace_repo_path)
             
             for path in possible_paths:
@@ -190,25 +195,10 @@ def rag_answer(
     # ---------------------------------------------
     # 🏗 ARCHITECTURE QUESTIONS (REPO-ONLY)
     # ---------------------------------------------
-    if "architecture" in q_lower and repo_path and os.path.exists(repo_path):
-        arch_data = infer_architecture(repo_path)
-
-        prompt = f"""
-QUESTION:
-{question}
-
-REPO STRUCTURE:
-{arch_data}
-
-If unclear, say:
-"I could not find this information in the repository."
-"""
-
-        answer = generate_answer(prompt)
-
+    if "architecture" in q_lower:
         return {
-            "answer": answer,
-            "confidence": "Medium",
+            "answer": infer_architecture(repo_path) if repo_path else "I could not find sufficient repository evidence to describe its architecture.",
+            "confidence": "Low",
         }
 
     # ---------------------------------------------
@@ -234,9 +224,12 @@ If unclear, say:
                         threshold=0.25,
                     )
                 )
+            except InferenceError:
+                raise
             except Exception as e:
-                print(f"[!] Error embedding query variant '{qv}': {e}")
-                continue
+                raise InferenceError("embedding_unavailable", "Embedding backend is unavailable", 503) from e
+    except InferenceError:
+        raise
     except Exception as e:
         print(f"[!] Error in vector search: {e}")
         return {
@@ -278,18 +271,10 @@ If unclear, say:
         user_prompt = build_user_prompt(question, context)
 
         answer = generate_answer(user_prompt)
+    except InferenceError:
+        raise
     except Exception as e:
-        print(f"[!] Error calling inference service: {e}")
-        error_msg = str(e)
-        if "memory" in error_msg.lower() or "system memory" in error_msg.lower():
-            return {
-                "answer": "The inference engine ran out of memory while generating the answer.",
-                "confidence": "Low",
-            }
-        return {
-            "answer": f"Error generating answer: {error_msg}. The inference service may be unavailable.",
-            "confidence": "Low",
-        }
+        raise InferenceError("inference_failure", "Unexpected inference service failure", 500) from e
     confidence = compute_confidence(results)
 
     final = {"answer": answer}
@@ -328,34 +313,10 @@ def rag_answer_multi_repo(
     question = question.strip()
     q_lower = question.lower().strip()
     
-    # Handle greetings (same as single repo)
-    greeting_exact_matches = {
-        "hi", "hello", "hey", "hi there", "hello there",
-        "who are you", "what are you", "who is this", "what is this",
-        "how are you", "how are you doing", "how's it going",
-        "introduce yourself", "tell me about yourself", "what do you do",
-        "what can you do", "what can you help with", "what is your purpose"
-    }
-    
-    if q_lower in greeting_exact_matches or any(kw in q_lower for kw in [
-        "who are you", "what are you", "how are you", "introduce yourself",
-        "tell me about yourself", "what do you do", "what can you do",
-        "what is your purpose", "what can you help"
-    ]):
-        return {
-            "answer": (
-                "Hello! I'm an AI assistant that understands repositories.\n\n"
-                "I analyze source code, documentation, and structure to answer questions "
-                "about specific projects. I can help you understand:\n"
-                "- What a project does and how it works\n"
-                "- Code architecture and structure\n"
-                "- Implementation details and patterns\n"
-                "- How to use or contribute to the project\n\n"
-                "Just ask me questions about any indexed repository!"
-            ),
-            "confidence": "High",
-        }
-    
+    if is_generic_question(question):
+        return greeting_answer()
+
+    repo_ids = [validate_repo_id(repo_id) for repo_id in repo_ids]
     # Ensure all repos are loaded
     loaded_stores = {}
     for repo_id in repo_ids:
@@ -404,9 +365,12 @@ def rag_answer_multi_repo(
                     for r in results:
                         r["repo_id"] = repo_id
                         all_results.append(r)
+                except InferenceError:
+                    raise
                 except Exception as e:
-                    print(f"[!] Error searching {repo_id} with variant '{qv}': {e}")
-                    continue
+                    raise InferenceError("embedding_unavailable", "Embedding backend is unavailable", 503) from e
+    except InferenceError:
+        raise
     except Exception as e:
         print(f"[!] Error in multi-repo vector search: {e}")
         return {
@@ -454,19 +418,10 @@ CONTEXT FROM REPOSITORIES:
 Please provide a comprehensive answer based on information from across all these repositories."""
 
         answer = generate_answer(user_prompt)
+    except InferenceError:
+        raise
     except Exception as e:
-        print(f"[!] Error calling inference service: {e}")
-        error_msg = str(e)
-        if "memory" in error_msg.lower() or "system memory" in error_msg.lower():
-            return {
-                "answer": "The inference engine ran out of memory while generating the answer.",
-                "confidence": "Low",
-            }
-        return {
-            "answer": f"Error during search: {str(e)}.",
-            "confidence": "Low",
-        }
-    
+        raise InferenceError("inference_failure", "Unexpected inference service failure", 500) from e
     confidence = compute_confidence(results)
     
     final = {"answer": answer}
@@ -498,6 +453,7 @@ def register_repo(
     *,
     repo_profile: Optional[Dict[str, Any]] = None,
 ):
+    repo_id = validate_repo_id(repo_id)
     _VECTOR_STORES[repo_id] = vector_store
     _REPO_PATHS[repo_id] = repo_path
 

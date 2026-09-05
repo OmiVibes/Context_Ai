@@ -2,6 +2,7 @@ import os
 import numpy as np
 import faiss
 import pickle
+from utils.repo_paths import repo_path, contained_path
 from rank_bm25 import BM25Okapi
 
 # -------------------------------------------------
@@ -14,7 +15,7 @@ def get_repo_dir(repo_id: str) -> str:
     """
     Returns the directory path for a given repo's vector store.
     """
-    return os.path.join(BASE_VECTOR_DIR, repo_id)
+    return str(repo_path(BASE_VECTOR_DIR, repo_id))
 
 
 class VectorStore:
@@ -79,8 +80,8 @@ class VectorStore:
         repo_dir = get_repo_dir(repo_id)
         os.makedirs(repo_dir, exist_ok=True)
 
-        faiss_path = os.path.join(repo_dir, "index.faiss")
-        meta_path = os.path.join(repo_dir, "metadata.pkl")
+        faiss_path = str(contained_path(repo_dir, "index.faiss"))
+        meta_path = str(contained_path(repo_dir, "metadata.pkl"))
 
         faiss.write_index(self.index, faiss_path)
 
@@ -100,8 +101,8 @@ class VectorStore:
     @staticmethod
     def load(repo_id: str):
         repo_dir = get_repo_dir(repo_id)
-        faiss_path = os.path.join(repo_dir, "index.faiss")
-        meta_path = os.path.join(repo_dir, "metadata.pkl")
+        faiss_path = str(contained_path(repo_dir, "index.faiss"))
+        meta_path = str(contained_path(repo_dir, "metadata.pkl"))
 
         # ✅ IMPORTANT: return None (not exception)
         # so rag/core.py can gracefully handle auto-load

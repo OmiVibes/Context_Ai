@@ -1,33 +1,5 @@
-import os
-import requests
 from collections import defaultdict
-from dotenv import load_dotenv
-
-load_dotenv()
-
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_API = "https://api.github.com"
-
-if not GITHUB_TOKEN:
-    raise RuntimeError("GITHUB_TOKEN environment variable not set")
-
-def fetch_issues(repo_owner: str, repo_name: str):
-    """
-    Fetch issues (including PRs, filtered later) from GitHub API
-    """
-    url = f"{GITHUB_API}/repos/{repo_owner}/{repo_name}/issues"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json"
-    }
-    params = {
-        "state": "all",
-        "per_page": 100
-    }
-
-    response = requests.get(url, headers=headers, params=params)
-    response.raise_for_status()
-    return response.json()
+from github.api import fetch_issues
 
 
 def list_milestones(repo_owner: str, repo_name: str):

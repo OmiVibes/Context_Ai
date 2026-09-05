@@ -130,6 +130,16 @@ def detect_repo_from_question(question: str, base_dir: str = None) -> Dict[str, 
     question_lower = question.lower()
     available_repo_ids = list(repos.keys())
     
+    exact_names = [repo for repo in available_repo_ids if any(
+        re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", question_lower)
+        for name in {repo.lower(), repo.lower().replace("-", " "), repo.lower().replace("_", " ")})]
+    if len(exact_names) == 1:
+        return {"status": "unique_match", "repo_id": exact_names[0], "matching_repos": exact_names,
+                "reason": "Explicit repository name", "matched_by": "repo_name"}
+    if len(exact_names) > 1:
+        return {"status": "multiple_matches", "repo_id": None, "matching_repos": exact_names,
+                "reason": "Multiple explicit repository names"}
+
     # Detect repository groups (frontend/backend pairs)
     repo_groups = detect_repo_groups(base_dir)
     

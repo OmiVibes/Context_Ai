@@ -6,10 +6,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from rag.core import _VECTOR_STORES
 from datetime import datetime
+from utils.errors import install_error_handlers, ServiceError
 from app_processing.file_loader import load_repo_files
 from app_processing.chunker import chunk_text
 from app_processing.embeddings import embed_texts
 from vector_store.store import VectorStore
+from utils.repo_paths import validate_repo_id, repo_path as safe_repo_path, contained_path, InvalidRepoId
 
 # Fix Windows console encoding for emojis
 if sys.platform == 'win32':
@@ -49,41 +51,11 @@ PROFILE_DIR = os.path.join(BASE_DIR, "repo_profiles")
 # -------------------------------------------------
 # GENERIC QUESTION DETECTION (GLOBAL / NON-REPO)
 # -------------------------------------------------
-GENERIC_QUERIES = {
-    "hi", "hello", "hey", "hi there", "hello there",
-    "how are you", "how are you doing",
-    "who are you", "what are you",
-    "what can you do", "help", "introduce yourself"
-}
-
-def is_generic_question(q: str) -> bool:
-    q = q.lower().strip()
-
-    # exact short greetings
-    if q in GENERIC_QUERIES:
-        return True
-
-    # greeting prefixes
-    if any(q.startswith(g) for g in ["hi", "hello", "hey"]):
-        return True
-
-    # identity / assistant questions (contains-based)
-    GENERIC_PATTERNS = [
-        "who are you",
-        "what are you",
-        "introduce yourself",
-        "what can you do",
-        "your purpose",
-        "about you",
-    ]
-
-    return any(p in q for p in GENERIC_PATTERNS)
+from utils.questions import is_generic_question, greeting_answer
 
 
-# -------------------------------------------------
-# APP
-# -------------------------------------------------
 app = FastAPI(title="Project Context AI – Thin API")
+install_error_handlers(app)
 
 
 # -------------------------------------------------
@@ -97,10 +69,10 @@ def create_indices_file(repo_id: str, vector_store, fingerprint: str = None, acc
     """
     try:
         os.makedirs(INDICES_STORE_DIR, exist_ok=True)
-        repo_indices_dir = os.path.join(INDICES_STORE_DIR, repo_id)
+        repo_indices_dir = str(safe_repo_path(INDICES_STORE_DIR, repo_id))
         os.makedirs(repo_indices_dir, exist_ok=True)
         
-        indices_file_path = os.path.join(repo_indices_dir, "indices.json")
+        indices_file_path = str(contained_path(repo_indices_dir, "indices.json"))
         
         # Get metadata from vector store
         metas = vector_store.metadatas if hasattr(vector_store, 'metadatas') else []
@@ -299,10 +271,10 @@ def health():
 # -------------------------------------------------
 @app.post("/index")
 def index_repo(req: IndexRequest):
-    repo_id = req.repo_id.strip()
-
-    if not repo_id:
-        raise HTTPException(status_code=400, detail="repo_id is required")
+    try:
+        repo_id = validate_repo_id(req.repo_id)
+    except InvalidRepoId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     print(f"[*] Index request received for: {repo_id}")
     
@@ -311,16 +283,16 @@ def index_repo(req: IndexRequest):
     repo_source = None
     
     # 1. Check workspace root (local projects)
-    workspace_repo_path = os.path.join(WORKSPACE_ROOT, repo_id)
-    if os.path.exists(workspace_repo_path):
+    workspace_repo_path = str(safe_repo_path(WORKSPACE_ROOT, repo_id))
+    if os.path.isdir(workspace_repo_path):
         repo_path = workspace_repo_path
         repo_source = "workspace"
     
     # 2. Check repos/ directory (git-cloned repos)
     if not repo_path:
         repos_dir = os.path.join(BASE_DIR, "repos")
-        git_repo_path = os.path.join(repos_dir, repo_id)
-        if os.path.exists(git_repo_path):
+        git_repo_path = str(safe_repo_path(repos_dir, repo_id))
+        if os.path.isdir(git_repo_path):
             repo_path = git_repo_path
             repo_source = "git"
     
@@ -351,11 +323,11 @@ def index_repo(req: IndexRequest):
     # -------------------------------------------------
     # 📁 Repo-specific profile directory
     # -------------------------------------------------
-    repo_profile_dir = os.path.join(PROFILE_DIR, repo_id)
+    repo_profile_dir = str(safe_repo_path(PROFILE_DIR, repo_id))
     os.makedirs(repo_profile_dir, exist_ok=True)
 
     os.makedirs(PROFILE_DIR, exist_ok=True)
-    profile_path = os.path.join(repo_profile_dir, "profile.json")
+    profile_path = str(contained_path(repo_profile_dir, "profile.json"))
 
     # -------------------------------------------------
     # 🔁 UPDATE-ONLY INDEXING (FINGERPRINT CHECK)
@@ -380,7 +352,7 @@ def index_repo(req: IndexRequest):
             "timestamp": datetime.utcnow().isoformat()
         }
 
-        decision_path = os.path.join(repo_profile_dir, "index_decision.json")
+        decision_path = str(contained_path(repo_profile_dir, "index_decision.json"))
         with open(decision_path, "w", encoding="utf-8") as f:
             json.dump(decision, f, indent=2)
 
@@ -426,21 +398,8 @@ def index_repo(req: IndexRequest):
     print(f"\n[*] INDEXING STARTED -> {repo_id}")
 
     # -------------------------------------------------
-    # 1️⃣ Remove README files from local projects (if any)
     # -------------------------------------------------
-    for root, dirs, files in os.walk(repo_path):
-        for file in files:
-            if file.lower().startswith("readme"):
-                readme_path = os.path.join(root, file)
-                try:
-                    os.remove(readme_path)
-                    print(f"[*] Removed README file: {readme_path}")
-                except Exception as e:
-                    print(f"[!] Could not remove README file {readme_path}: {e}")
-
-    # -------------------------------------------------
-    # 2️⃣ Load files (READMEs and docs are skipped - code files only)
-    # -------------------------------------------------
+    # Documentation is filtered by the loader, never removed from the repository.
     documents = load_repo_files(repo_path)
     files_loaded = len(documents)
     
@@ -516,7 +475,7 @@ def index_repo(req: IndexRequest):
     # -------------------------------------------------
     os.makedirs(CHUNK_STORE_DIR, exist_ok=True)
 
-    repo_chunk_dir = os.path.join(CHUNK_STORE_DIR, repo_id)
+    repo_chunk_dir = str(safe_repo_path(CHUNK_STORE_DIR, repo_id))
     os.makedirs(repo_chunk_dir, exist_ok=True)
 
     chunk_snapshot = {
@@ -537,7 +496,7 @@ def index_repo(req: IndexRequest):
             "text": c["text"]
         })
 
-    chunk_file_path = os.path.join(repo_chunk_dir, "chunks.json")
+    chunk_file_path = str(contained_path(repo_chunk_dir, "chunks.json"))
 
     with open(chunk_file_path, "w", encoding="utf-8") as f:
         json.dump(chunk_snapshot, f, indent=2)
@@ -597,12 +556,12 @@ def index_repo(req: IndexRequest):
         "timestamp": datetime.utcnow().isoformat()
     }
 
-    decision_path = os.path.join(repo_profile_dir, "index_decision.json")
+    decision_path = str(contained_path(repo_profile_dir, "index_decision.json"))
     with open(decision_path, "w", encoding="utf-8") as f:
         json.dump(decision, f, indent=2)
 
 
-    manifest_path = os.path.join(repo_profile_dir, "index_manifest.json")
+    manifest_path = str(contained_path(repo_profile_dir, "index_manifest.json"))
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     
@@ -651,154 +610,71 @@ def index_repo(req: IndexRequest):
 # -------------------------------------------------
 @app.post("/ask")
 def ask(q: Query):
-    # Initialize session if doesn't exist
-    if q.session_id not in _SESSIONS:
-        _SESSIONS[q.session_id] = {}
-    
-    session = _SESSIONS[q.session_id]
+    from rag.repo_detector import get_all_available_repos, detect_repo_from_question
+
     user_input = q.user.strip()
-    
     if not user_input:
         raise HTTPException(status_code=400, detail="'user' field cannot be empty")
-    # -------------------------------------------------
-    # 🧠 GENERIC QUESTION SHORT-CIRCUIT (NO REPO)
-    # -------------------------------------------------
+    session = _SESSIONS.setdefault(q.session_id, {})
     if is_generic_question(user_input):
-        return {
-            "answer": (
-                "Hello! 👋 I'm an AI assistant that understands code repositories.\n\n"
-                "You can ask me questions about a project, its code, architecture, "
-                "or how different parts of a repository work."
-            ),
-            "confidence": "High"
-        }
+        session.pop("question", None)
+        return greeting_answer()
 
-    
-    from rag.repo_detector import get_all_available_repos
-    
-    # Check if there's a pending question in session (needs repository selection)
-    if "question" in session:
-        # User is selecting a repository from the clarification list
-        # Check if user input matches a repository name
-        available_repos = get_all_available_repos(base_dir=BASE_DIR)
-        user_input_lower = user_input.lower()
-        
-        # Try to find matching repo (exact match or contains repo name)
-        matching_repo = None
-        for repo in available_repos:
-            repo_lower = repo.lower()
-            # Exact match or user typed just the repo name
-            if user_input_lower == repo_lower or user_input_lower == repo_lower.replace("-", " ") or user_input_lower == repo_lower.replace("_", " "):
-                matching_repo = repo
-                break
-            # Check if user input contains repo name (e.g., "I want sentiment-analysis")
-            if repo_lower in user_input_lower or user_input_lower in repo_lower:
-                matching_repo = repo
-                break
-        
-        if matching_repo:
-            # User selected a repository
-            question = session["question"]
-            repo_id = matching_repo
-            del session["question"]  # Clear stored question
-            print(f"[*] User selected repository '{repo_id}' for session {q.session_id}")
-            
-            # Execute the query with selected repository
-            try:
-                result = rag_answer(
-                    question=question,
-                    repo_id=repo_id,
-                    show_sources=q.show_sources,
-                    show_confidence=q.show_confidence,
-                )
-                print(f"[+] Query completed for {repo_id} in session {q.session_id}")
-                return result
-            except Exception as e:
-                print(f"[!] Error processing query: {e}")
-                import traceback
-                traceback.print_exc()
-                raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
-        else:
-            # User input doesn't match any repo - treat as new question or ask for clarification
-            available_repos = get_all_available_repos(base_dir=BASE_DIR)
-            repos_list = "\n".join([f"{i+1}. {repo}" for i, repo in enumerate(available_repos)])
-            return {
-                "message": f"I couldn't match '{user_input}' to a repository. Please select one from the list:\n\n{repos_list}",
-                "available_repos": available_repos
-            }
-    
-    # No pending question - treat user input as a new question
-    question = user_input
-    
-    # Try to detect repository from question
-    from rag.repo_detector import detect_repo_from_question
-    detection_result = detect_repo_from_question(question, base_dir=BASE_DIR)
-    
-    # Auto-detected unique match or project group - answer directly
-    if detection_result["status"] == "unique_match":
-        repo_id = detection_result["repo_id"]
-        print(f"[+] Auto-detected repository: {repo_id} for session {q.session_id}")
-        
-        try:
-            result = rag_answer(
-                question=question,
-                repo_id=repo_id,
-                show_sources=q.show_sources,
-                show_confidence=q.show_confidence,
-            )
-            print(f"[+] Query completed for {repo_id} in session {q.session_id}")
+    available_repos = get_all_available_repos(base_dir=BASE_DIR)
+    selection = user_input.lower()
+    for prefix in ("i want to use ", "i want ", "use ", "select "):
+        if selection.startswith(prefix):
+            selection = selection[len(prefix):].strip()
+            break
+    matches = [repo for repo in available_repos if selection in
+               {repo.lower(), repo.lower().replace("-", " "), repo.lower().replace("_", " ")}]
+    selected = matches[0] if len(matches) == 1 else None
+    pending = session.pop("question", None)
+    question = pending if pending and selected else user_input
+    detection = detect_repo_from_question(question, base_dir=BASE_DIR)
+    repo_id = selected
+    if not repo_id and detection["status"] == "unique_match":
+        repo_id = detection["repo_id"]
+    if not repo_id and detection["status"] == "general_question":
+        active = session.get("repo_id")
+        if active in available_repos:
+            repo_id = active
+
+    try:
+        if repo_id:
+            result = rag_answer(question=question, repo_id=repo_id,
+                                show_sources=q.show_sources, show_confidence=q.show_confidence)
+            session["repo_id"] = repo_id
             return result
-        except Exception as e:
-            print(f"[!] Error processing query: {e}")
-            import traceback
-            traceback.print_exc()
-            raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
-            
-    elif detection_result["status"] == "project_group":
-        # Project group detected - query across all repos
-        matching_repos = detection_result["matching_repos"]
-        project_base = detection_result["project_base_name"]
-        print(f"[+] Auto-detected project group: {project_base} with repos: {', '.join(matching_repos)}")
-        
-        try:
+        if detection["status"] == "project_group":
             from rag.core import rag_answer_multi_repo
-            result = rag_answer_multi_repo(
-                question=question,
-                repo_ids=matching_repos,
-                show_sources=q.show_sources,
-                show_confidence=q.show_confidence,
-            )
-            result["project_group"] = project_base
-            result["searched_repos"] = matching_repos
-            print(f"[+] Query completed across {len(matching_repos)} repositories")
+            session.pop("repo_id", None)
+            repos = detection["matching_repos"]
+            result = rag_answer_multi_repo(question=question, repo_ids=repos,
+                                           show_sources=q.show_sources, show_confidence=q.show_confidence)
+            result["project_group"] = detection["project_base_name"]
+            result["searched_repos"] = repos
             return result
-        except Exception as e:
-            print(f"[!] Error processing multi-repo query: {e}")
-            import traceback
-            traceback.print_exc()
-            raise HTTPException(status_code=500, detail=f"Error processing multi-repo query: {str(e)}")
-    else:
-        # Needs clarification - store question in session and return available repos
-        available_repos = get_all_available_repos(base_dir=BASE_DIR)
-        if not available_repos:
-            return {
-                "message": "No repositories are currently indexed. Please index a repository first using the /index endpoint.",
-                "available_repos": []
-            }
-        
-        # Store question in session for follow-up
-        session["question"] = question
-        print(f"[*] Stored question in session {q.session_id}, requesting clarification")
-        
-        repos_list = "\n".join([f"{i+1}. {repo}" for i, repo in enumerate(available_repos)])
-        return {
-            "message": f"I found multiple repositories. Which one are you referring to?\n\n{repos_list}\n\nYou can simply type the repository name (e.g., 'sentiment-analysis').",
-            "available_repos": available_repos
-        }
+    except (ServiceError, InvalidRepoId):
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"code": "query_failure", "message": "Unexpected error processing query"}) from exc
 
-# -------------------------------------------------
-# 🔎 DEBUG / STATE ENDPOINT (DEMO FRIENDLY)
-# -------------------------------------------------
+    session.pop("repo_id", None)
+    if not available_repos:
+        return {"message": "No repositories are currently indexed. Please index a repository first using the /index endpoint.", "available_repos": []}
+    session["question"] = user_input
+    repos_list = "\n".join(f"{i+1}. {repo}" for i, repo in enumerate(available_repos))
+    return {"message": f"Which repository are you referring to?\n\n{repos_list}\n\nType the repository name.",
+            "available_repos": available_repos}
+
+
+@app.get("/health/github")
+def github_configuration():
+    from github.api import configuration_status
+    return configuration_status()
+
+
 @app.get("/debug/state")
 def debug_state():
     # repos currently indexed in memory

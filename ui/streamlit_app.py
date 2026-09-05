@@ -3,6 +3,7 @@ import subprocess
 import json
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 # -------------------------------------------------
 # CONFIG
@@ -29,25 +30,22 @@ def call_mcp(payload: dict):
         text=True,
     )
 
-    # Send request
-    proc.stdin.write(json.dumps(payload))
-    proc.stdin.close()
-
-    stdout = proc.stdout.read().strip()
-    stderr = proc.stderr.read().strip()
-
-    # MCP must respond with JSON ONLY
-    if not stdout:
-        return {"error": "Empty response from MCP"}
-
     try:
-        return json.loads(stdout)
+        stdout, stderr = proc.communicate(json.dumps(payload), timeout=300)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return {"error": "Repository operation timed out"}
+    if not stdout.strip():
+        return {"error": "Empty response from MCP"}
+    try:
+        response = json.loads(stdout)
+        if isinstance(response.get("error"), dict):
+            response["error"] = response["error"].get("message", "MCP operation failed")
+        return response
     except json.JSONDecodeError:
-        return {
-            "error": "Invalid JSON from MCP",
-            "raw_output": stdout,
-            "stderr": stderr,
-        }
+        return {"error": "Invalid JSON from MCP"}
+
 
 # -------------------------------------------------
 # UI LAYOUT
@@ -139,8 +137,8 @@ with tab_milestones:
             "id": 3,
             "method": "call/list_milestones",
             "params": {
-                "repo_owner": "OmiVibes",
-                "repo_name": repo_id,
+                "repo_owner": urlparse(repo_url).path.strip("/").split("/")[0],
+                "repo_name": urlparse(repo_url).path.strip("/").split("/")[-1].removesuffix(".git"),
             },
         })
 
@@ -162,8 +160,8 @@ with tab_risks:
             "id": 4,
             "method": "call/risk_summary",
             "params": {
-                "repo_owner": "OmiVibes",
-                "repo_name": repo_id,
+                "repo_owner": urlparse(repo_url).path.strip("/").split("/")[0],
+                "repo_name": urlparse(repo_url).path.strip("/").split("/")[-1].removesuffix(".git"),
             },
         })
 

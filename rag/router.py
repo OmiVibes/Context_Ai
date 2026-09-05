@@ -3,7 +3,9 @@
 import os
 from typing import Dict, Any, Optional
 
-from rag.core import rag_answer
+from rag.core import rag_answer, rag_answer_multi_repo
+from utils.questions import is_generic_question, greeting_answer
+from utils.repo_paths import validate_repo_id
 from rag.milestones import list_milestones
 from rag.risk import detect_risks
 from rag.repo_detector import detect_repo_from_question, get_all_available_repos
@@ -14,6 +16,10 @@ from rag.repo_detector import detect_repo_from_question, get_all_available_repos
 class RouterAgent:
     def route(self, *, question: str, repo_id: Optional[str], params: dict) -> dict:
         q = question.lower().strip()
+        if is_generic_question(question):
+            return {**greeting_answer(), "agent": "IdentityAgent"}
+        if repo_id:
+            repo_id = validate_repo_id(repo_id)
 
         # -----------------------------
         # 🔍 REPO DETECTION (if repo_id not provided)
@@ -26,6 +32,9 @@ class RouterAgent:
             if detection_result["status"] == "unique_match":
                 # Found unique match - use it
                 repo_id = detection_result["repo_id"]
+            elif detection_result["status"] == "project_group":
+                return rag_answer_multi_repo(question=question, repo_ids=detection_result["matching_repos"],
+                    show_sources=params.get("show_sources", False), show_confidence=params.get("show_confidence", False))
             elif detection_result["status"] == "multiple_matches":
                 # Multiple repos match - ask user to clarify
                 matching_repos = detection_result["matching_repos"]
@@ -111,39 +120,6 @@ class RouterAgent:
 
         # -----------------------------
         # 👋 GREETINGS & IDENTITY (Check FIRST - works for any repo)
-        # -----------------------------
-        greeting_exact = {
-            "hi", "hello", "hey", "hi there", "hello there",
-            "who are you", "what are you", "who is this", "what is this",
-            "how are you", "how are you doing", "how's it going",
-            "introduce yourself", "tell me about yourself", "what do you do",
-            "what can you do", "what can you help with", "what is your purpose"
-        }
-        
-        greeting_keywords = [
-            "who are you", "what are you", "how are you", "introduce yourself",
-            "tell me about yourself", "what do you do", "what can you do",
-            "what is your purpose", "what can you help"
-        ]
-        
-        if q in greeting_exact or any(keyword in q for keyword in greeting_keywords):
-            return {
-                "answer": (
-                    "Hello! 👋 I'm an AI assistant that understands GitHub repositories.\n\n"
-                    "I analyze source code, documentation, and structure to answer questions "
-                    "about specific projects. I can help you understand:\n"
-                    "- What a project does and how it works\n"
-                    "- Code architecture and structure\n"
-                    "- Implementation details and patterns\n"
-                    "- How to use or contribute to the project\n\n"
-                    "Just ask me questions about any indexed repository!"
-                ),
-                "confidence": "High",
-                "agent": "IdentityAgent",
-            }
-
-        # -----------------------------
-        # 📌 Milestones
         # -----------------------------
         if any(k in q for k in ["milestone", "phase", "roadmap", "plan", "status"]):
             repo_owner = params.get("repo_owner")

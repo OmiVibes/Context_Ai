@@ -7,7 +7,8 @@ __pycache__/
 
 chunk_store/
 indices_store/
-repo_profiles/
+repo_profiles/*
+!repo_profiles/extractor.py
 repos/
 vector_store/repos/
 
@@ -20,3 +21,7 @@ htmlcov/
 *.log
 *.sqlite
 *.db
+
+# Local audit outputs contain machine paths and generated fixture results.
+audit/*results.json
+audit/postman_responses.json
