@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import app
 from utils.session_store import SessionStore
 import rag.core as rag
-from rag.grounded import prepare_context, select_evidence, INSUFFICIENT
+from rag.grounded import prepare_context, select_evidence, preserve_exact_facts, INSUFFICIENT
 from vector_store.store import VectorStore
 
 
@@ -194,3 +194,10 @@ class GroundedTests(unittest.TestCase):
         self.http.json.return_value = {'answer': 'The add function returns 4.'}
         result = self.ask('What does the add function return?').json()
         self.assertEqual(result['answer'], 'The `add` function returns `a + b`.')
+
+    def test_route_and_config_facts_are_preserved_without_literal_dumping(self):
+        route = preserve_exact_facts('Which health endpoint path is used?', 'There is a health endpoint.', [hit('ROUTES = {"/health": health}')])
+        config = preserve_exact_facts('Which port is configured?', 'The service has a port.', [hit('PORT = 8088', file='config.py')])
+        self.assertIn('`/health`', route)
+        self.assertIn('`PORT = 8088`', config)
+        self.assertNotIn('calculator.py', config)

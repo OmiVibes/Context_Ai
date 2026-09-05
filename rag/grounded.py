@@ -130,7 +130,7 @@ def answer_from_results(question, results, repositories, generate, show_confiden
     logger.info('request_id=%s action=inference model=service_default configured_hint=%s', current_request_id(), os.getenv('LLM_DEFAULT_MODEL', 'service-managed'))
     try:
         response['answer'] = generate(build_user_prompt(question, context))
-        response['answer'] = _preserve_code_return_expression(question, response['answer'], supplied)
+        response['answer'] = preserve_exact_facts(question, response['answer'], supplied)
     except InferenceError as exc:
         logger.warning('request_id=%s action=inference outcome=%s duration=%.3f', current_request_id(), exc.code, time.monotonic()-started)
         raise
@@ -143,14 +143,32 @@ def answer_from_results(question, results, repositories, generate, show_confiden
     return response
 
 
-def _preserve_code_return_expression(question, answer, supplied):
+def extract_exact_facts(question, supplied):
+    """Conservatively find question-relevant literals in accepted evidence only."""
+    question_terms = _terms(question)
+    facts = []
+    for item in supplied:
+        text = item.get("text", "")
+        for expression in re.findall(r"\breturn\s+([^\n#]+)", text):
+            if re.search(r"\b(return|returns|expression)\b", question, re.I):
+                facts.append(("return", expression.strip().rstrip(";")))
+        for route in re.findall(r"(?<!\w)(/[A-Za-z0-9_{}./-]+)", text):
+            if {"route", "endpoint", "path", "api", "health"}.intersection(question_terms): facts.append(("route", route))
+        for key, value in re.findall(r"\b([A-Z][A-Z0-9_]{2,}|[A-Za-z_]\w*)\s*=\s*([0-9]+(?:\.[0-9]+)?|['\"][^'\"]+['\"])", text):
+            if _terms(key).intersection(question_terms) or _terms(value).intersection(question_terms) or {"port", "host", "timeout", "config", "configuration"}.intersection(question_terms):
+                facts.append(("config", f"{key} = {value}"))
+    return list(dict.fromkeys(facts))
+
+
+def preserve_exact_facts(question, answer, supplied):
     """Reject a numeric evaluation when evidence gives a symbolic return expression.
 
     Small local models sometimes evaluate parameterized code (``a + b`` -> ``4``).
     That value is unsupported repository evidence, so retain the exact expression.
     """
-    if not re.search(r"\b(return|returns)\b", question, re.IGNORECASE):
-        return answer
+    facts = extract_exact_facts(question, supplied)
+    # Correct symbolic return claims first; then append at most one omitted relevant
+    # fact so natural language remains the model's answer rather than a literal dump.
     names = re.findall(r"\b(?:function|def)\s+([A-Za-z_]\w*)\b", question, re.IGNORECASE)
     names += re.findall(r"\b([A-Za-z_]\w*)\s+function\b", question, re.IGNORECASE)
     for item in supplied:
@@ -163,4 +181,15 @@ def _preserve_code_return_expression(question, answer, supplied):
             if (not re.fullmatch(r"[0-9.]+", expression)
                     and expression not in answer):
                 return f"The `{name}` function returns `{expression}`."
+    for category, fact in facts:
+        if fact not in answer:
+            if category == "route":
+                return answer.rstrip() + f" The route is `{fact}`."
+            if category == "config":
+                return answer.rstrip() + f" The configured value is `{fact}`."
+            if category == "return":
+                return answer.rstrip() + f" It returns `{fact}`."
     return answer
+
+
+_preserve_code_return_expression = preserve_exact_facts
