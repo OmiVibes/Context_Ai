@@ -52,3 +52,29 @@ Failure categories distinguish `retrieval_miss`, `weak_retrieval`,
 `inference_error`, and `timeout` so later optimization can use evidence rather than
 tuning against this benchmark blindly. Small fixture latency samples are operational
 observations, not statistically strong performance conclusions.
+
+## Evidence gating and calibration
+
+Production retrieval still returns its configured top-K candidates. Before context
+construction, `rag.grounded.select_evidence` accepts only finite candidates at or
+above `RAG_EVIDENCE_MIN_SCORE` (default `0.25`). The hybrid VectorStore score is
+sorted descending, so a higher score is more relevant. Candidates below
+`RAG_EVIDENCE_STRONG_SCORE` (default `0.35`) need meaningful normalized query/text
+overlap; lower-ranked candidates without overlap are also excluded below
+`RAG_EVIDENCE_RELATIVE_SCORE` (default `0.72`) of the best score. This rejects weak
+embedding noise before inference while retaining identifiers such as `add`,
+snake_case, and filenames. `RAG_MAX_SOURCES` (default `3`) bounds returned citations.
+
+The 15-case synthetic calibration selected this simple overlap safeguard rather than
+raising a global retrieval threshold: it preserved deterministic supported evidence
+acceptance and rejected all six expanded unsupported examples. This is a small,
+synthetic calibration only; it should be rechecked against representative repositories
+before changing defaults. Accepted chunks alone enter the prompt. Returned citations
+deduplicate same-file chunks unless trusted source ranges differ, while allowing
+multiple files for multi-file answers.
+
+Live `llama3.2:1b` observations after the change: Hit@5 `1.0`, MRR `0.7963`, citation
+hit `1.0`, citation precision `0.8333`, and unsupported refusal accuracy `1.0` across
+15 cases. Exact lexical grounding was `0.6667`; the recorded mismatches were
+evidence-consistent paraphrases or omitted literal syntax, so they remain visible
+rather than being treated as model-quality improvements.

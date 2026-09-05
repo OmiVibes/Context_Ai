@@ -19,6 +19,7 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 logger.propagate = False
 INSUFFICIENT = "Insufficient repository evidence to answer this question."
+_STOP_WORDS = {"a", "an", "and", "are", "does", "for", "from", "how", "in", "is", "of", "on", "the", "this", "to", "what", "which", "who", "with"}
 
 
 def positive_int(name, default):
@@ -28,11 +29,41 @@ def positive_int(name, default):
     return value
 
 
-def prepare_context(results, repositories):
+def _terms(value):
+    words = re.findall(r"[a-z0-9]+", (value or "").lower().replace("_", " "))
+    return {word for word in words if word not in _STOP_WORDS and len(word) > 1}
+
+
+def select_evidence(question, results, repositories):
+    """Accept explainable evidence before context/inference; retrieval stays broad."""
+    minimum = float(os.getenv("RAG_EVIDENCE_MIN_SCORE", "0.25"))
+    strong = float(os.getenv("RAG_EVIDENCE_STRONG_SCORE", "0.35"))
+    relative = float(os.getenv("RAG_EVIDENCE_RELATIVE_SCORE", "0.72"))
+    ranked = sorted((r for r in results if math.isfinite(float(r.get("score", 0)))), key=lambda r: float(r["score"]), reverse=True)
+    best = float(ranked[0]["score"]) if ranked else 0.0
+    query_terms = _terms(question)
+    accepted = []
+    for result in ranked:
+        score, text = float(result["score"]), result.get("text")
+        if score < minimum or not isinstance(text, str) or not text.strip():
+            continue
+        overlap = query_terms.intersection(_terms(text))
+        # Strong semantic matches may be paraphrases; weak matches need at least one
+        # meaningful concept to avoid passing embedding noise to the model.
+        if score < strong and not overlap:
+            continue
+        if best and score < best * relative and not overlap:
+            continue
+        accepted.append(result)
+    return accepted
+
+
+def prepare_context(results, repositories, question=""):
     limit = positive_int("RAG_MAX_CONTEXT_CHARS", 3000)
     top_k = positive_int("RAG_TOP_K", 5)
-    ranked = sorted(results, key=lambda r: float(r.get('score', 0)), reverse=True)
-    blocks, sources, supplied, seen = [], [], [], set()
+    ranked = select_evidence(question, results, repositories) if question else sorted(results, key=lambda r: float(r.get('score', 0)), reverse=True)
+    blocks, sources, supplied, seen, cited_files = [], [], [], set(), set()
+    citation_limit = positive_int("RAG_MAX_SOURCES", 3)
     for result in ranked:
         score = float(result.get('score', 0))
         text = result.get('text')
@@ -73,7 +104,12 @@ def prepare_context(results, repositories):
                 break
             block = header + excerpt + suffix
         blocks.append(block)
-        sources.append(source)
+        # A file can supply several chunks to context, but one citation represents
+        # that file unless trusted line ranges distinguish separate evidence.
+        citation_key = (repository, file) if not start else (repository, file, start, end)
+        if citation_key not in cited_files and len(sources) < citation_limit:
+            sources.append(source)
+            cited_files.add(citation_key)
         supplied.append(result)
         if len(blocks) >= top_k:
             break
@@ -81,7 +117,7 @@ def prepare_context(results, repositories):
 
 
 def answer_from_results(question, results, repositories, generate, show_confidence, confidence):
-    context, sources, supplied = prepare_context(results, repositories)
+    context, sources, supplied = prepare_context(results, repositories, question)
     response = {'repository': repositories[0] if len(repositories) == 1 else repositories,
                 'sources': sources}
     logger.info('request_id=%s action=rag_evidence repositories=%s retrieved=%d supplied=%d context_chars=%d chunks=%s',

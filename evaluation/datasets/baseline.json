@@ -7,5 +7,11 @@
   {"id":"service_history_001","repository":"service_repo","question":"Who won the World Cup in 1998?","answerable":false,"tags":["unsupported"]},
   {"id":"pipeline_transform_001","repository":"data_pipeline_repo","question":"How are input values transformed?","expected_files":["pipeline.py"],"expected_terms":["value * scale"],"answerable":true,"tags":["function-behavior","data-processing"]},
   {"id":"pipeline_config_001","repository":"data_pipeline_repo","question":"What is the default scale configuration?","expected_files":["settings.yaml"],"expected_terms":["10"],"answerable":true,"tags":["configuration"]},
-  {"id":"pipeline_biology_001","repository":"data_pipeline_repo","question":"What is the DNA sequence of a human gene?","answerable":false,"tags":["unsupported"]}
+  {"id":"pipeline_biology_001","repository":"data_pipeline_repo","question":"What is the DNA sequence of a human gene?","answerable":false,"tags":["unsupported"]},
+  {"id":"calculator_multiply_missing_001","repository":"calculator_repo","question":"How does the multiply function handle decimal overflow?","answerable":false,"tags":["unsupported","nonexistent-function"]},
+  {"id":"calculator_subtract_001","repository":"calculator_repo","question":"Which expression does subtract return?","expected_files":["calculator.py"],"expected_terms":["a - b"],"answerable":true,"tags":["identifier","function-behavior"]},
+  {"id":"service_jwt_missing_001","repository":"service_repo","question":"How does this API implement JWT refresh tokens?","answerable":false,"tags":["unsupported","plausible-software"]},
+  {"id":"service_host_001","repository":"service_repo","question":"What host is configured for the service?","expected_files":["config.py"],"expected_terms":["127.0.0.1"],"answerable":true,"tags":["configuration","paraphrase"]},
+  {"id":"pipeline_version_missing_001","repository":"data_pipeline_repo","question":"Which model version produced the pipeline metrics?","answerable":false,"tags":["unsupported","missing-metric"]},
+  {"id":"pipeline_summary_001","repository":"data_pipeline_repo","question":"What does summarize do after values are transformed?","expected_files":["pipeline.py"],"expected_terms":["sum"],"answerable":true,"tags":["function-behavior","architecture"]}
 ]

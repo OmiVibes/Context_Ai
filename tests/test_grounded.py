@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import app
 from utils.session_store import SessionStore
 import rag.core as rag
-from rag.grounded import prepare_context, INSUFFICIENT
+from rag.grounded import prepare_context, select_evidence, INSUFFICIENT
 from vector_store.store import VectorStore
 
 
@@ -79,6 +79,34 @@ class GroundedTests(unittest.TestCase):
                 self.assertEqual(data['answer'], INSUFFICIENT)
                 self.assertEqual(data['sources'], [])
         self.post.assert_not_called()
+
+    def test_weak_unrelated_evidence_refuses_before_inference(self):
+        self.store.search.return_value = [hit('def add(a, b): return a + b', .28)]
+        data = self.ask('Which planet is closest to the Sun?').json()
+        self.assertEqual(data['answer'], INSUFFICIENT)
+        self.assertEqual(data['sources'], [])
+        self.post.assert_not_called()
+
+    def test_identifier_overlap_and_strong_evidence_are_accepted(self):
+        weak_code = hit('def add(a, b): return a + b', .28)
+        strong_paraphrase = hit('This module performs arithmetic.', .40, 'notes.py')
+        accepted = select_evidence('What does add return?', [weak_code, strong_paraphrase], ['demo'])
+        self.assertIn(weak_code, accepted)
+        self.assertIn(strong_paraphrase, accepted)
+
+    def test_rejected_evidence_never_enters_context_or_sources(self):
+        weak = hit('unrelated document', .27, 'noise.py')
+        strong = hit('def add(a, b): return a + b', .8)
+        context, sources, supplied = prepare_context([weak, strong], ['demo'], 'What does add return?')
+        self.assertNotIn('unrelated', context)
+        self.assertEqual([s['file'] for s in sources], ['calculator.py'])
+        self.assertEqual(supplied, [strong])
+
+    def test_same_file_chunks_have_one_citation_but_multi_file_is_retained(self):
+        rows = [hit('def add(): return 1', .9), hit('def sub(): return 2', .8), hit('PORT=8088', .7, 'config.py')]
+        _, sources, supplied = prepare_context(rows, ['demo'], 'add port')
+        self.assertEqual([source['file'] for source in sources], ['calculator.py', 'config.py'])
+        self.assertEqual(len(supplied), 3)
 
     def test_transport_failures_reach_api(self):
         for error, status in [(requests.Timeout(), 504), (requests.ConnectionError(), 503)]:

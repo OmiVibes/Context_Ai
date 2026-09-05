@@ -18,6 +18,16 @@ are unchanged. Results are merged in descending score order. The configured top-
 applies per search and to the final merged evidence set. Multi-repository hits are
 copied when attaching provenance instead of mutating shared result objects.
 
+After top-K retrieval, deterministic evidence selection rejects unusable candidates
+before context and inference. VectorStore sorts its hybrid cosine/BM25 score in
+descending order, so higher scores rank first. Candidates below the configured strong
+score require normalized meaningful query/evidence overlap; this prevents weak
+semantic noise from causing unsupported questions to reach the model. `RAG_EVIDENCE_MIN_SCORE`
+(`0.25`), `RAG_EVIDENCE_STRONG_SCORE` (`0.35`), `RAG_EVIDENCE_RELATIVE_SCORE`
+(`0.72`) and `RAG_MAX_SOURCES` (`3`) are configurable. Accepted evidence, not every
+retrieved candidate, supplies prompt context and citations. Same-file chunks produce
+one file-level citation unless trusted line ranges distinguish them.
+
 Context includes source headers and text, with both counted toward the character
 budget. Whole chunks are preferred. If the highest-ranked chunk alone is too big,
 only its text is excerpted and marked truncated; its metadata header stays intact.

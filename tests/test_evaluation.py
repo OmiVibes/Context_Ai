@@ -13,7 +13,7 @@ from evaluation.runner import DEFAULT_DATASET, DEFAULT_FIXTURES, DeterministicRe
 class EvaluationTests(unittest.TestCase):
     def test_dataset_loads_versioned_cases(self):
         cases = load_dataset(DEFAULT_DATASET)
-        self.assertEqual(len(cases), 9)
+        self.assertEqual(len(cases), 15)
         self.assertEqual({case["repository"] for case in cases}, {"calculator_repo", "service_repo", "data_pipeline_repo"})
 
     def test_dataset_rejects_invalid_case(self):
@@ -60,7 +60,7 @@ class EvaluationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             report = run(mode="deterministic", output_dir=None)
             json_path, markdown_path = write_reports(report, temp)
-            self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["summary"]["cases"], 9)
+            self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["summary"]["cases"], 15)
             self.assertIn("## Metrics", markdown_path.read_text(encoding="utf-8"))
 
     def test_latency_fields_are_present(self):
