@@ -283,11 +283,10 @@ def ui():
     at=AppTest.from_file(str(ROOT/'ui/streamlit_app.py'),default_timeout=30).run()
     require(not at.exception,str(at.exception))
     require(len(at.tabs)==3,f'tabs={len(at.tabs)}')
-    at.text_input[0].set_value('hello')
-    next(b for b in at.button if b.label=='Ask').click()
-    at.run()
+    require(at.chat_input, 'chat input missing')
+    at.chat_input[0].set_value('hello').run()
     require(not at.exception and not at.error,str((at.exception,at.error)))
-    return f"three tabs render; greeting button executed; text inputs: {[x.label for x in at.text_input]}"
+    return f"three tabs render; greeting chat executed; controls: {[x.label for x in at.selectbox]}"
 check("Streamlit rendering and chat interaction",ui,"Streamlit AppTest + real MCP")
 
 

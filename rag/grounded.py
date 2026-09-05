@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 
 from rag.prompt_builder import build_user_prompt
@@ -92,6 +93,7 @@ def answer_from_results(question, results, repositories, generate, show_confiden
     logger.info('rag inference model=service_default configured_hint=%s', os.getenv('LLM_DEFAULT_MODEL', 'service-managed'))
     try:
         response['answer'] = generate(build_user_prompt(question, context))
+        response['answer'] = _preserve_code_return_expression(question, response['answer'], supplied)
     except InferenceError as exc:
         logger.warning('rag inference outcome=%s duration=%.3f', exc.code, time.monotonic()-started)
         raise
@@ -102,3 +104,26 @@ def answer_from_results(question, results, repositories, generate, show_confiden
     if show_confidence:
         response['confidence'] = confidence(supplied)
     return response
+
+
+def _preserve_code_return_expression(question, answer, supplied):
+    """Reject a numeric evaluation when evidence gives a symbolic return expression.
+
+    Small local models sometimes evaluate parameterized code (``a + b`` -> ``4``).
+    That value is unsupported repository evidence, so retain the exact expression.
+    """
+    if not re.search(r"\b(return|returns)\b", question, re.IGNORECASE):
+        return answer
+    names = re.findall(r"\b(?:function|def)\s+([A-Za-z_]\w*)\b", question, re.IGNORECASE)
+    names += re.findall(r"\b([A-Za-z_]\w*)\s+function\b", question, re.IGNORECASE)
+    for item in supplied:
+        text = item.get("text", "")
+        for name in names:
+            match = re.search(r"\bdef\s+" + re.escape(name) + r"\s*\([^)]*\)\s*:\s*(?:\n\s*)?(?:[^\n]*\n\s*)*?return\s+([^\n#]+)", text)
+            if not match:
+                continue
+            expression = match.group(1).strip().rstrip()
+            if (not re.fullmatch(r"[0-9.]+", expression)
+                    and re.search(r"\breturns?\b[^\n]*\b\d+(?:\.\d+)?\b", answer, re.IGNORECASE)):
+                return f"The `{name}` function returns `{expression}`."
+    return answer

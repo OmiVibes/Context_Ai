@@ -130,6 +130,15 @@ with sources. Configure `RAG_TOP_K` (5), `RAG_MAX_CONTEXT_CHARS` (3000),
 `LLM_DEFAULT_MODEL` as needed. See [RAG pipeline](rag/PIPELINE.md) for response
 fields, configuration, compatibility, tests and file-level citation limitations.
 
+The Streamlit product flow is **select repository → select model → ask → inspect
+Sources / Evidence**. Repository and model choices are validated through the API;
+the model selector only shows models reported by the separate inference service.
+The sidebar displays index status and offers a selected-repository-only refresh using
+the existing safe indexing pipeline. Chat turns are bounded in memory by
+`CHAT_HISTORY_TURNS` (default 10); **New Chat** clears turns while retaining the
+selected repository and model. See [UI controls](ui/CONTROLS.md) for API endpoints,
+status meanings, follow-ups, and persistence limits.
+
 Generated data such as virtual environments, caches, repository indexes, vector files, and local profiles are excluded from version control through `.gitignore`.
 
 Index fingerprints hash eligible relative paths and source content with SHA-256;

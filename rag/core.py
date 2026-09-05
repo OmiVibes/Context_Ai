@@ -73,6 +73,7 @@ def rag_answer(
     repo_id: str,
     show_sources: bool = False,
     show_confidence: bool = False,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
 
     repo_id = validate_repo_id(repo_id)
@@ -221,7 +222,8 @@ def rag_answer(
             "confidence": "Low",
         }
 
-    return answer_from_results(question, all_results, [repo_id], generate_answer,
+    generate = (lambda prompt: generate_answer(prompt, model=model)) if model else generate_answer
+    return answer_from_results(question, all_results, [repo_id], generate,
                                show_confidence, compute_confidence)
 
 # -------------------------------------------------
@@ -233,6 +235,7 @@ def rag_answer_multi_repo(
     repo_ids: List[str],
     show_sources: bool = False,
     show_confidence: bool = False,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Query across multiple repositories (e.g., frontend + backend).
@@ -307,7 +310,8 @@ def rag_answer_multi_repo(
             "confidence": "Low",
         }
 
-    return answer_from_results(question, all_results, repo_ids, generate_answer,
+    generate = (lambda prompt: generate_answer(prompt, model=model)) if model else generate_answer
+    return answer_from_results(question, all_results, repo_ids, generate,
                                show_confidence, compute_confidence)
 
 

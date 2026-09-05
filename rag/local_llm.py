@@ -8,9 +8,12 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 LLM_API_URL = "http://127.0.0.1:9001/generate"
 
 
-def generate_answer(prompt: str) -> str:
+def generate_answer(prompt: str, model: str = None) -> str:
     try:
-        response = requests.post(os.getenv("LLM_API_URL", LLM_API_URL), json={"prompt": prompt},
+        payload = {"prompt": prompt}
+        if model:
+            payload["model"] = model
+        response = requests.post(os.getenv("LLM_API_URL", LLM_API_URL), json=payload,
             timeout=float(os.getenv("LLM_CLIENT_TIMEOUT_SECONDS", "270")))
         if response.status_code >= 400:
             status = response.status_code if response.status_code in (500, 503, 504) else 500

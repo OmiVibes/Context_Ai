@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import requests
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -146,11 +147,84 @@ class Query(BaseModel):
     user: str
     show_sources: bool = False
     show_confidence: bool = False
+    repo_id: Optional[str] = None
+    model: Optional[str] = None
+
+
+class SessionSelection(BaseModel):
+    repo_id: Optional[str] = None
+    model: Optional[str] = None
 
 # -------------------------------------------------
 # SESSION STORE (IN-MEMORY)
 # -------------------------------------------------
 _SESSIONS: Dict[str, Dict[str, Any]] = {}
+_INDEX_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+def _history_limit() -> int:
+    try:
+        return max(1, int(os.getenv("CHAT_HISTORY_TURNS", "10")))
+    except ValueError:
+        return 10
+
+
+def _record_turn(session: Dict[str, Any], question: str, result: Dict[str, Any], repo_id=None, model=None):
+    if not isinstance(result, dict) or not result.get("answer"):
+        return
+    turns = session.setdefault("history", [])
+    turns.append({"user": question, "assistant": result["answer"], "repository": repo_id,
+                  "model": model, "sources": result.get("sources", [])})
+    del turns[:-_history_limit()]
+
+
+def _follow_up_question(question: str, session: Dict[str, Any]) -> str:
+    """Clarify referential follow-ups for retrieval without treating prior answers as evidence."""
+    turns = session.get("history", [])
+    referential = ("that", "it", "there", "this", "those", "where is", "where are")
+    if not turns or not any(token in question.lower() for token in referential):
+        return question
+    previous = turns[-1].get("user", "").strip()
+    if not previous:
+        return question
+    return f"{question}\nPrevious user question for retrieval clarification: {previous[:300]}"
+
+
+def _repository_path(repo_id: str):
+    workspace = str(safe_repo_path(WORKSPACE_ROOT, repo_id))
+    if os.path.isdir(workspace) and os.path.abspath(workspace) != os.path.abspath(PROJECT_CONTEXT_DIR):
+        return workspace
+    git_path = str(safe_repo_path(os.path.join(BASE_DIR, "repos"), repo_id))
+    return git_path if os.path.isdir(git_path) else None
+
+
+def _repository_ids():
+    from rag.repo_detector import get_all_available_repos
+    ids = set(get_all_available_repos(base_dir=BASE_DIR))
+    for root in (WORKSPACE_ROOT, os.path.join(BASE_DIR, "repos")):
+        if os.path.isdir(root):
+            for name in os.listdir(root):
+                path = os.path.join(root, name)
+                if os.path.isdir(path) and os.path.abspath(path) != os.path.abspath(PROJECT_CONTEXT_DIR):
+                    try:
+                        ids.add(validate_repo_id(name))
+                    except InvalidRepoId:
+                        continue
+    return sorted(ids, key=str.lower)
+
+
+def _models_from_service():
+    url = os.getenv("LLM_API_URL", "http://127.0.0.1:9001/generate").rsplit("/", 1)[0] + "/models"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        models = data.get("models", [])
+        if not isinstance(models, list) or not all(isinstance(model, str) and model for model in models):
+            raise ValueError("invalid model response")
+        return {"default_model": data.get("default_model"), "models": models}
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        raise ServiceError("model_service_unavailable", "Cannot retrieve available inference models", 503) from exc
 
 
 # -------------------------------------------------
@@ -547,6 +621,83 @@ def index_repo(req: IndexRequest):
 # -------------------------------------------------
 # 🔹 QUERY ENDPOINT (SESSION-BASED)
 # -------------------------------------------------
+@app.get("/repositories")
+def repositories():
+    items = []
+    for repo_id in _repository_ids():
+        path = _repository_path(repo_id)
+        profile_path = str(contained_path(safe_repo_path(PROFILE_DIR, repo_id), "profile.json"))
+        indexed = VectorStore.load(repo_id) is not None
+        state = "indexed" if indexed else "not_indexed"
+        if path and indexed and os.path.exists(profile_path):
+            try:
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    stored = json.load(f).get("fingerprint")
+                if stored != compute_project_fingerprint(path):
+                    state = "stale"
+            except (OSError, ValueError, TypeError):
+                state = "failed"
+        job = _INDEX_JOBS.get(repo_id)
+        if job and job.get("state") == "indexing":
+            state = "indexing"
+        items.append({"repo_id": repo_id, "status": state,
+                      "stage": job.get("stage") if job else ("complete" if indexed else "not indexed")})
+    return {"repositories": items}
+
+
+@app.get("/models")
+def models():
+    return _models_from_service()
+
+
+@app.get("/sessions/{session_id}")
+def get_session(session_id: str):
+    session = _SESSIONS.get(session_id, {})
+    return {"session_id": session_id, "repository": session.get("repo_id"),
+            "model": session.get("model"), "history": session.get("history", [])}
+
+
+@app.put("/sessions/{session_id}")
+def select_session(session_id: str, selection: SessionSelection):
+    session = _SESSIONS.setdefault(session_id, {})
+    if selection.repo_id is not None:
+        repo_id = validate_repo_id(selection.repo_id)
+        if repo_id not in _repository_ids():
+            raise HTTPException(status_code=404, detail={"code": "repository_not_available", "message": "Selected repository is not available"})
+        session["repo_id"] = repo_id
+        session.pop("question", None)
+    if selection.model is not None:
+        available = _models_from_service()
+        if selection.model not in available["models"]:
+            raise HTTPException(status_code=400, detail={"code": "model_not_available", "message": "Selected model is not available"})
+        session["model"] = selection.model
+    return get_session(session_id)
+
+
+@app.delete("/sessions/{session_id}")
+def reset_session(session_id: str):
+    # A new chat retains the user's explicit repository/model choices, not old turns or pending input.
+    session = _SESSIONS.get(session_id, {})
+    _SESSIONS[session_id] = {key: session[key] for key in ("repo_id", "model") if key in session}
+    return get_session(session_id)
+
+
+@app.post("/repositories/{repo_id}/reindex")
+def reindex_repository(repo_id: str):
+    repo_id = validate_repo_id(repo_id)
+    if repo_id not in _repository_ids():
+        raise HTTPException(status_code=404, detail={"code": "repository_not_available", "message": "Selected repository is not available"})
+    _INDEX_JOBS[repo_id] = {"state": "indexing", "stage": "scanning files"}
+    try:
+        _INDEX_JOBS[repo_id]["stage"] = "cleaning, chunking, embedding, and saving index"
+        result = index_repo(IndexRequest(repo_id=repo_id))
+        _INDEX_JOBS[repo_id] = {"state": "complete", "stage": "complete"}
+        return {**result, "progress": ["scanning files", "cleaning", "chunking", "embedding", "saving index", "complete"]}
+    except Exception:
+        _INDEX_JOBS[repo_id] = {"state": "failed", "stage": "failed"}
+        raise
+
+
 @app.post("/ask")
 def ask(q: Query):
     from rag.repo_detector import get_all_available_repos, detect_repo_from_question
@@ -555,9 +706,22 @@ def ask(q: Query):
     if not user_input:
         raise HTTPException(status_code=400, detail="'user' field cannot be empty")
     session = _SESSIONS.setdefault(q.session_id, {})
+    if q.repo_id is not None:
+        explicit_repo = validate_repo_id(q.repo_id)
+        if explicit_repo not in _repository_ids():
+            raise HTTPException(status_code=404, detail={"code": "repository_not_available", "message": "Selected repository is not available"})
+        session["repo_id"] = explicit_repo
+        session.pop("question", None)
+    if q.model is not None:
+        available = _models_from_service()
+        if q.model not in available["models"]:
+            raise HTTPException(status_code=400, detail={"code": "model_not_available", "message": "Selected model is not available"})
+        session["model"] = q.model
     if is_generic_question(user_input):
         session.pop("question", None)
-        return greeting_answer()
+        result = greeting_answer()
+        _record_turn(session, user_input, result, session.get("repo_id"), session.get("model"))
+        return result
 
     available_repos = get_all_available_repos(base_dir=BASE_DIR)
     selection = user_input.lower()
@@ -571,7 +735,7 @@ def ask(q: Query):
     pending = session.pop("question", None)
     question = pending if pending and selected else user_input
     detection = detect_repo_from_question(question, base_dir=BASE_DIR)
-    repo_id = selected
+    repo_id = q.repo_id or selected
     if not repo_id and detection["status"] == "unique_match":
         repo_id = detection["repo_id"]
     if not repo_id and detection["status"] == "general_question":
@@ -581,18 +745,23 @@ def ask(q: Query):
 
     try:
         if repo_id:
-            result = rag_answer(question=question, repo_id=repo_id,
-                                show_sources=q.show_sources, show_confidence=q.show_confidence)
+            retrieval_question = _follow_up_question(question, session)
+            result = rag_answer(question=retrieval_question, repo_id=repo_id,
+                                show_sources=q.show_sources, show_confidence=q.show_confidence,
+                                model=session.get("model"))
             session["repo_id"] = repo_id
+            _record_turn(session, question, result, repo_id, session.get("model"))
             return result
         if detection["status"] == "project_group":
             from rag.core import rag_answer_multi_repo
             session.pop("repo_id", None)
             repos = detection["matching_repos"]
-            result = rag_answer_multi_repo(question=question, repo_ids=repos,
-                                           show_sources=q.show_sources, show_confidence=q.show_confidence)
+            result = rag_answer_multi_repo(question=_follow_up_question(question, session), repo_ids=repos,
+                                           show_sources=q.show_sources, show_confidence=q.show_confidence,
+                                           model=session.get("model"))
             result["project_group"] = detection["project_base_name"]
             result["searched_repos"] = repos
+            _record_turn(session, question, result, repos, session.get("model"))
             return result
     except (ServiceError, InvalidRepoId):
         raise

@@ -154,3 +154,9 @@ class GroundedTests(unittest.TestCase):
         self.assertIn('context_chars=', text)
         self.assertNotIn('SENSITIVE_FIXTURE_CONTENT', text)
         self.assertNotIn('PRIVATE_QUESTION', text)
+
+    def test_parameterized_code_return_is_not_replaced_with_an_invented_number(self):
+        self.store.search.return_value = [hit('def add(a, b):\n    return a + b')]
+        self.http.json.return_value = {'answer': 'The add function returns 4.'}
+        result = self.ask('What does the add function return?').json()
+        self.assertEqual(result['answer'], 'The `add` function returns `a + b`.')
