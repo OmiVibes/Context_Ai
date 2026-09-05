@@ -24,6 +24,7 @@ rag/                    Retrieval, prompt building, metrics, risks, milestones
 ui/                     Streamlit frontend
 utils/                  MCP client, tests, and project fingerprint helpers
 vector_store/           FAISS vector store implementation
+evaluation/             Versioned RAG benchmark, synthetic fixtures, and reports
 ```
 
 ## Requirements
@@ -166,3 +167,14 @@ The audit distinguishes `PASS`, code `FAIL`, and externally `BLOCKED` checks. A 
 GitHub credential remains blocked, never passed. Supply `GITHUB_TOKEN` securely through
 the ignored `.env` or process environment, restart services, and rerun the audit to
 verify live GitHub access. Do not paste or commit credentials into code or fixtures.
+
+## RAG evaluation
+
+The version-controlled synthetic benchmark in `evaluation/` measures retrieval Hit@K
+and MRR, file-level citation hit/precision, deterministic grounding constraints,
+unsupported-question refusal behavior, and latency. Run it without Ollama using
+`.\venv\Scripts\python.exe -m evaluation.runner --mode deterministic`. Optional
+`--mode live --model llama3.2:1b` uses the existing local embedding backend and
+separate inference service. Generated reports are ignored; see
+[`evaluation/README.md`](evaluation/README.md) for dataset fields, configuration
+comparisons, interpretation, and limitations.

@@ -1,0 +1,11 @@
+[
+  {"id":"calculator_add_001","repository":"calculator_repo","question":"What does the add function return?","expected_files":["calculator.py"],"expected_terms":["a + b"],"answerable":true,"tags":["function-behavior"],"difficulty":"easy"},
+  {"id":"calculator_dependency_001","repository":"calculator_repo","question":"What test runner is configured?","expected_files":["pytest.ini"],"expected_terms":["pytest"],"answerable":true,"tags":["dependencies"]},
+  {"id":"calculator_astronomy_001","repository":"calculator_repo","question":"What planet is closest to the Sun?","answerable":false,"tags":["unsupported"]},
+  {"id":"service_route_001","repository":"service_repo","question":"Which file defines the health endpoint?","expected_files":["service.py"],"expected_terms":["/health"],"answerable":true,"tags":["file-location","architecture"]},
+  {"id":"service_config_001","repository":"service_repo","question":"Which port does the service use?","expected_files":["config.py"],"expected_terms":["8088"],"answerable":true,"tags":["configuration"]},
+  {"id":"service_history_001","repository":"service_repo","question":"Who won the World Cup in 1998?","answerable":false,"tags":["unsupported"]},
+  {"id":"pipeline_transform_001","repository":"data_pipeline_repo","question":"How are input values transformed?","expected_files":["pipeline.py"],"expected_terms":["value * scale"],"answerable":true,"tags":["function-behavior","data-processing"]},
+  {"id":"pipeline_config_001","repository":"data_pipeline_repo","question":"What is the default scale configuration?","expected_files":["settings.yaml"],"expected_terms":["10"],"answerable":true,"tags":["configuration"]},
+  {"id":"pipeline_biology_001","repository":"data_pipeline_repo","question":"What is the DNA sequence of a human gene?","answerable":false,"tags":["unsupported"]}
+]

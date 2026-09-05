@@ -26,3 +26,6 @@ runtime/
 # Local audit outputs contain machine paths and generated fixture results.
 audit/*results.json
 audit/postman_responses.json
+
+# Generated RAG evaluation reports are local benchmark observations.
+evaluation/results/
