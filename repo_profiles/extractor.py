@@ -12,7 +12,7 @@ def _read_readme(repo_path: str) -> Optional[str]:
     for name in ["README.md", "README.MD", "README.txt"]:
         path = str(contained_path(repo_path, name))
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 return f.read()
     return None
 

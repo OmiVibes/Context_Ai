@@ -14,6 +14,8 @@ def detect_risks(repo_owner: str, repo_name: str):
     risky_items = []
 
     for issue in issues:
+        if issue.get("state") != "open" or "pull_request" in issue:
+            continue
         text = f"{issue.get('title','')} {issue.get('body','')}".lower()
 
         if any(k in text for k in RISK_KEYWORDS):

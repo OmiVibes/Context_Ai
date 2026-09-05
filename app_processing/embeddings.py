@@ -14,9 +14,24 @@ def _embed(text, model):
 
 
 def clean(text: str) -> str:
-    text = re.sub(r"```.*?```", "", text, flags=re.S)
-    text = re.sub(r"\n+", " ", text)
-    return text.strip()
+    """Remove paired Markdown fence lines, preserving code and its whitespace."""
+    lines = text.splitlines(keepends=True)
+    output = []
+    position = 0
+    while position < len(lines):
+        opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})([^\r\n]*)[\r\n]*", lines[position])
+        if opening and not (opening[1][0] == "`" and "`" in opening[2]):
+            marker = opening[1]
+            closing = re.compile(r" {0,3}" + re.escape(marker[0]) + "{" + str(len(marker)) + r",}[ \t]*[\r\n]*")
+            end = next((i for i in range(position + 1, len(lines)) if closing.fullmatch(lines[i])), None)
+            if end is not None:
+                output.extend(lines[position + 1:end])
+                position = end + 1
+                continue
+        # Unclosed fences and inline backticks might be source text: retain them.
+        output.append(lines[position])
+        position += 1
+    return "".join(output).strip("\r\n")
 
 
 def embed_texts(texts: list[str], model="nomic-embed-text"):

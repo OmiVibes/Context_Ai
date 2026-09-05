@@ -123,3 +123,22 @@ has been added.
 ## Notes
 
 Generated data such as virtual environments, caches, repository indexes, vector files, and local profiles are excluded from version control through `.gitignore`.
+
+Index fingerprints hash eligible relative paths and source content with SHA-256;
+timestamps alone never determine whether content changed. Ingestion and fingerprinting
+share source/ignore rules. Git interprets `.gitignore` rules, including for archives
+using disposable metadata outside the source directory. A matching fingerprint skips
+indexing only if the persisted vector artifacts load and validate; missing or corrupt
+artifacts are rebuilt without deleting source files. The repaired ingestion version
+causes an explicit reindex of older profiles once, then unchanged repositories skip.
+
+Source and profile text is read as strict UTF-8. Unicode is preserved, fenced code
+content is retained, and invalid UTF-8 is reported rather than silently discarded.
+Secret masking covers common JSON/config keys and known token signatures, but is
+not a guarantee of detecting every secret format. Risks now include only open issues;
+closed issues and pull requests are excluded from active risk summaries.
+
+The audit distinguishes `PASS`, code `FAIL`, and externally `BLOCKED` checks. A rejected
+GitHub credential remains blocked, never passed. Supply `GITHUB_TOKEN` securely through
+the ignored `.env` or process environment, restart services, and rerun the audit to
+verify live GitHub access. Do not paste or commit credentials into code or fixtures.

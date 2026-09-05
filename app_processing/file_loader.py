@@ -1,8 +1,10 @@
 import os
 import re
 import nbformat
-import unicodedata
 import math
+import json
+import subprocess
+import tempfile
 from pathlib import Path
 
 # ADD THESE IMPORTS (NEW ⭐)
@@ -92,15 +94,23 @@ MAX_TEXT_FILE_SIZE = 300 * 1024
 # SECRET MASKING — KEYWORD BASED (NEW ⭐⭐)
 # ---------------------------------------------
 SECRET_PATTERNS = [
-    r"(?i)(api[_-]?key\s*=\s*[\"']?[A-Za-z0-9_\-]{8,})",
-    r"(?i)(secret\s*=\s*[\"']?.{6,})",
-    r"(?i)(password\s*=\s*[\"']?.{4,})",
-    r"(?i)(token\s*=\s*[\"']?[A-Za-z0-9_\-]{8,})",
     r"AKIA[0-9A-Z]{16}",
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
 ]
 
+SENSITIVE_KEYS = {"password", "passwd", "token", "apikey", "secret", "accesstoken"}
+CONFIG_SECRET = re.compile(
+    r'''(?ix)(?P<prefix>(?<![\w])['"]?(?:password|passwd|token|api[_-]?key|secret|access[_-]?token)['"]?\s*(?::|=(?!=))\s*)'''
+    r'''(?P<value>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;\#}\]]+)'''
+)
+
 def apply_keyword_mask(text: str) -> str:
+    def redact(match):
+        value = match['value']
+        quote = value[0] if value.startswith(('"', "'")) else ''
+        return match['prefix'] + quote + '<MASKED_SECRET>' + quote
+
+    text = CONFIG_SECRET.sub(redact, text)
     for pattern in SECRET_PATTERNS:
         text = re.sub(pattern, "<MASKED_SECRET>", text)
     return text
@@ -115,12 +125,32 @@ def shannon_entropy(s):
 def entropy_mask(text: str) -> str:
     def replace_match(match):
         word = match.group(0)
-        return "<MASKED_SECRET>" if shannon_entropy(word) > 3.5 else word
+        opaque = (len(word) >= 32 and any(c.isdigit() for c in word)
+                  and any(c.isupper() for c in word) and any(c.islower() for c in word))
+        return "<MASKED_SECRET>" if opaque and shannon_entropy(word) > 3.5 else word
 
     return re.sub(r"[A-Za-z0-9+/=]{20,}", replace_match, text)
 
 # FULL mask chain
 def mask_secrets(text: str) -> str:
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        data = None
+    if isinstance(data, (dict, list)):
+        def redact(value):
+            if isinstance(value, dict):
+                return {key: ('<MASKED_SECRET>' if item is not None else None)
+                        if re.sub(r'[^a-z0-9]', '', key.lower()) in SENSITIVE_KEYS else redact(item)
+                        for key, item in value.items()}
+            if isinstance(value, list):
+                return [redact(item) for item in value]
+            if isinstance(value, str):
+                for pattern in SECRET_PATTERNS:
+                    value = re.sub(pattern, '<MASKED_SECRET>', value)
+                return entropy_mask(value)
+            return value
+        return json.dumps(redact(data), ensure_ascii=False, indent=2)
     text = apply_keyword_mask(text)
     text = entropy_mask(text)
     return text
@@ -128,23 +158,10 @@ def mask_secrets(text: str) -> str:
 # ---------------------------------------------
 # EMOJI + SYMBOL FILTER
 # ---------------------------------------------
-EMOJI_PATTERN = re.compile(
-    "[" 
-    "\U0001F600-\U0001F64F"
-    "\U0001F300-\U0001F5FF"
-    "\U0001F680-\U0001F6FF"
-    "\U0001F1E0-\U0001F1FF"
-    "\U00002702-\U000027B0"
-    "\U000024C2-\U0001F251"
-    "]+",
-    flags=re.UNICODE
-)
-
 def clean_unicode(text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", text)
-    cleaned = EMOJI_PATTERN.sub("", normalized)
-    cleaned = "".join(c for c in cleaned if c.isprintable() or c == "\n")
-    return cleaned
+    # Symbols, combining marks, emoji and indentation can all be source data.
+    # Strip only a transport BOM and NULs; never normalize identifier/string values.
+    return text.removeprefix('\ufeff').replace('\x00', '')
 
 # ---------------------------------------------
 # Basic non-English detection (debug only)
@@ -194,90 +211,71 @@ def load_ipynb(file_path: str, metadata: dict) -> list[dict]:
 # ---------------------------------------------
 # MAIN INGEST FUNCTION (merged with new rules)
 # ---------------------------------------------
+GENERATED_DIRS = {"chunk_store", "indices_store", "repos", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", "htmlcov"}
+DOCUMENT_PREFIXES = ("readme", "license", "changelog", "contributing", "authors", "credits", "history")
+
+
+def iter_repo_files(repo_path):
+    """Select the same source files for ingestion and content fingerprinting."""
+    base = Path(repo_path).resolve()
+    candidates = []
+    has_ignore_rules = False
+    for root, dirs, files in os.walk(base):
+        has_ignore_rules = has_ignore_rules or '.gitignore' in files
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS | GENERATED_DIRS
+                         and (Path(root) / d).resolve().is_relative_to(base))
+        for name in sorted(files):
+            path = Path(root) / name
+            relative = path.relative_to(base)
+            if (name.lower().startswith(DOCUMENT_PREFIXES)
+                    or path.suffix.lower() not in ALLOWED_EXTENSIONS
+                    or is_secret_or_binary(str(path))
+                    or not path.resolve().is_relative_to(base)):
+                continue
+            # The tool's generated profiles are data; extractor.py remains source.
+            if relative.parts[0] == "repo_profiles" and path.suffix.lower() == ".json":
+                continue
+            if path.stat().st_size <= MAX_TEXT_FILE_SIZE:
+                candidates.append(path)
+    ignored = set()
+    if candidates and ((base / ".git").exists() or has_ignore_rules):
+        names = [p.relative_to(base).as_posix() for p in candidates]
+        if (base / '.git').exists():
+            result = _git_check_ignore(base, names)
+        else:
+            # Archives may contain ignore rules without .git. Let Git interpret
+            # those rules using disposable metadata, never initializing the source.
+            with tempfile.TemporaryDirectory(prefix='context_ignore_') as metadata:
+                subprocess.run(['git', 'init', '--bare', '--quiet', metadata],
+                               check=True, capture_output=True, timeout=15)
+                result = _git_check_ignore(base, names, metadata)
+        if result.returncode not in (0, 1):
+            raise RuntimeError("Cannot determine repository ignore rules")
+        ignored = set(result.stdout.decode("utf-8").rstrip("\0").split("\0"))
+    return [p for p in candidates if p.relative_to(base).as_posix() not in ignored]
+
+
+def _git_check_ignore(base, names, metadata=None):
+    command = ['git', '-C', str(base)]
+    if metadata is not None:
+        command.extend(['--git-dir', metadata, '--work-tree', str(base)])
+    return subprocess.run(command + ['check-ignore', '--no-index', '--stdin', '-z'],
+                          input=('\0'.join(names) + '\0').encode('utf-8'),
+                          capture_output=True, timeout=15)
+
+
 def load_repo_files(repo_path: str) -> list[dict]:
-    """
-    Load code files from repository, excluding documentation files.
-    Focuses on actual source code to answer questions based on implementation.
-    """
+    """Read selected source content without modifying repository files."""
     documents = []
-
-    # Skip REPO_MANIFEST.md - it's documentation, not code
-    # Focus on actual code files only
-
-    # Do not read source through symlinks or Windows junctions outside this repo.
-    canonical_root = Path(repo_path).resolve()
-    for root, dirs, files in os.walk(repo_path):
-        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS
-                   and (Path(root) / d).resolve().is_relative_to(canonical_root)]
-
-        for file in files:
-            # Skip documentation files - focus on code only
-            if file == "REPO_MANIFEST.md":
-                continue
-
-            # Skip README and documentation files to focus on code
-            file_lower = file.lower()
-            if file_lower.startswith("readme") or file_lower.startswith("license"):
-                continue
-            
-            # Skip other common documentation files
-            doc_patterns = ["changelog", "contributing", "authors", "credits", "history"]
-            if any(file_lower.startswith(pattern) for pattern in doc_patterns):
-                continue
-
-            path = os.path.join(root, file)
-            if not Path(path).resolve().is_relative_to(canonical_root):
-                continue
-            rel_path = path.replace(repo_path, "").lstrip(os.sep)
-
-            # Skip secret or binary file types
-            if is_secret_or_binary(path):
-                continue
-
-            ext = os.path.splitext(file)[1].lower()
-            if ext not in ALLOWED_EXTENSIONS:
-                continue
-
-            # Size skip guard
-            try:
-                if os.path.getsize(path) > MAX_TEXT_FILE_SIZE:
-                    continue
-            except Exception:
-                continue
-
-            meta = {
-                "file_path": rel_path,
-                "abs_path": path,
-                "doc_type": "source"
-            }
-
-            # Notebook support
-            if ext == ".ipynb":
-                documents.extend(load_ipynb(path, meta))
-                continue
-
-            # Normal text/code file
-            try:
-                # Skip markdown files entirely - focus on actual code files
-                # Markdown files are typically documentation, not code
-                if ext == ".md":
-                    continue
-                
-                # Read code files
-                raw = read_file(path)
-
-                cleaned = clean_unicode(raw)
-                cleaned = mask_secrets(cleaned)
-
-                if cleaned.strip():
-                    lang = detect_language_sample(cleaned[:400])
-                    if lang != "English/Latin":
-                        print(f"🌐 Non-English text detected ({lang}) in {rel_path}")
-                    documents.append({
-                        "text": cleaned,
-                        "metadata": meta
-                    })
-            except Exception as e:
-                print(f"⚠️ Error reading {path}: {e}")
-
+    base = Path(repo_path).resolve()
+    for path in iter_repo_files(base):
+        relative = str(path.relative_to(base))
+        meta = {"file_path": relative, "abs_path": str(path), "doc_type": "source"}
+        if path.suffix.lower() == ".ipynb":
+            documents.extend(load_ipynb(str(path), meta))
+            continue
+        raw = read_file(path)
+        cleaned = mask_secrets(clean_unicode(raw))
+        if cleaned.strip():
+            documents.append({"text": cleaned, "metadata": meta})
     return documents

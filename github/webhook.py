@@ -1,6 +1,7 @@
 import os
 import hmac
 import hashlib
+import re
 from fastapi import HTTPException
 
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
@@ -10,9 +11,9 @@ if not GITHUB_WEBHOOK_SECRET:
 
 
 def verify_github_signature(payload: bytes, signature_header: str):
-    sha_name, signature = signature_header.split("=")
-    if sha_name != "sha256":
-        raise HTTPException(status_code=400, detail="Invalid signature type")
+    if not isinstance(signature_header, str) or not re.fullmatch(r"sha256=[0-9a-fA-F]{64}", signature_header):
+        raise HTTPException(status_code=400, detail="Missing or malformed webhook signature")
+    signature = signature_header.split("=", 1)[1].lower()
 
     mac = hmac.new(
         GITHUB_WEBHOOK_SECRET.encode(),

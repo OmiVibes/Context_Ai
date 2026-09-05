@@ -40,7 +40,7 @@ def read_markdown_file(file_path: str) -> str:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"{file_path} not found")
 
-    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     cleaned_lines = []
@@ -66,9 +66,5 @@ def read_file(file_path: str) -> str:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"{file_path} not found")
 
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
-    except Exception:
-        # Gracefully skip unreadable/binary edge cases
-        return ""
+    with open(file_path, "r", encoding="utf-8") as f:
+        return f.read()

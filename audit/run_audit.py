@@ -30,7 +30,8 @@ def check(name, fn, mode="deterministic"):
         detail = fn()
         status = "PASS"
     except Exception as exc:
-        status, detail = "FAIL", f"{type(exc).__name__}: {exc}"
+        status = "BLOCKED" if mode == "live read-only GitHub" and getattr(exc, "code", None) in {"github_auth_failed", "github_not_configured"} else "FAIL"
+        detail = f"{type(exc).__name__}: {exc}"
     item = dict(name=name, status=status, mode=mode,
                 seconds=round(time.monotonic()-start, 2), detail=str(detail or "OK"))
     RESULTS.append(item)
@@ -120,7 +121,7 @@ def llm_live():
     return answer
 
 
-check("real default LLM generation", llm_live, "live local qwen2.5:7b")
+check("real default LLM generation", llm_live, "live configured local default model")
 
 
 def llm_failure():
@@ -352,4 +353,4 @@ def postman():
     return f"{len(collection['item'])} request definitions match actual endpoint methods"
 check("Postman route alignment",postman)
 
-print('SUMMARY',json.dumps({s:sum(r['status']==s for r in RESULTS) for s in ('PASS','FAIL')}),flush=True)
+print('SUMMARY',json.dumps({s:sum(r['status']==s for r in RESULTS) for s in ('PASS','FAIL','BLOCKED')}),flush=True)

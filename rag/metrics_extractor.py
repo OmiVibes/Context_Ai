@@ -33,13 +33,16 @@ def extract_accuracy(text: str) -> Optional[str]:
     for line in lines:
         if any(k in line for k in keywords):
             # Percent format (94.8%)
-            percents = re.findall(r"\d{1,3}(?:\.\d+)?\s*%", line)
+            percent_matches = list(re.finditer(r"(?<![\w.+-])(\d+(?:\.\d+)?)\s*(?:%|percent\b)", line))
 
             # Decimal format (0.948)
-            decimals = re.findall(r"\b0\.\d+\b", line)
+            decimal_matches = re.finditer(r"(?<![\w.+-])0\.\d+\b", line)
+            decimals = [m.group() for m in decimal_matches
+                        if not any(p.start() <= m.start() < p.end() for p in percent_matches)]
 
-            for p in percents:
-                candidates.append(p.strip())
+            for p in percent_matches:
+                if 0 <= float(p[1]) <= 100:
+                    candidates.append(p[1] + "%")
 
             for d in decimals:
                 try:

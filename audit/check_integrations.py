@@ -13,12 +13,16 @@ sys.path.insert(0,str(ROOT))
 os.chdir(ROOT)
 RESULTS=[]
 
+class GitHubCredentialBlock(RuntimeError):
+    pass
+
+
 def check(name,fn,mode='fixture'):
     start=time.monotonic()
     try:
         detail=fn(); status='PASS'
     except Exception as exc:
-        detail=f'{type(exc).__name__}: {exc}'; status='FAIL'
+        detail=f'{type(exc).__name__}: {exc}'; status='BLOCKED' if isinstance(exc, GitHubCredentialBlock) else 'FAIL'
     row=dict(name=name,status=status,mode=mode,seconds=round(time.monotonic()-start,2),detail=str(detail or 'OK'))
     RESULTS.append(row)
     print(json.dumps(row),flush=True)
@@ -60,7 +64,14 @@ def ui_button(label):
     next(b for b in at.button if b.label==label).click()
     at.run()
     require(not at.exception,str(at.exception))
-    require(not at.error,'; '.join(x.value for x in at.error))
+    messages = [x.value for x in at.error]
+    auth_messages = {
+        'GitHub authentication failed. Check GITHUB_TOKEN and its validity',
+        'Set GITHUB_TOKEN to enable GitHub Milestones and Risks',
+    }
+    if messages and all(message in auth_messages for message in messages):
+        raise GitHubCredentialBlock('; '.join(messages))
+    require(not at.error,'; '.join(messages))
     return 'button completed without UI error'
 check('UI milestones tab real button',lambda:ui_button('Load Milestones'),'AppTest + real MCP/GitHub')
 check('UI risks tab real button',lambda:ui_button('Analyze Risks'),'AppTest + real MCP/GitHub')

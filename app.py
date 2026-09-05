@@ -344,56 +344,22 @@ def index_repo(req: IndexRequest):
     current_fingerprint = compute_project_fingerprint(repo_path)
 
     if old_fingerprint == current_fingerprint:
-        decision = {
-            "repo_id": repo_id,
-            "action": "skipped",
-            "reason": "No changes detected",
-            "fingerprint": current_fingerprint,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-
-        decision_path = str(contained_path(repo_profile_dir, "index_decision.json"))
-        with open(decision_path, "w", encoding="utf-8") as f:
-            json.dump(decision, f, indent=2)
-
-        print(f"[>] SKIPPING INDEX -> {repo_id} (no changes detected)")
-        
-        # Even if skipped, try to load existing vector store and register it
-        try:
-            vector_store = VectorStore.load(repo_id=repo_id)
-            if vector_store:
-                profile = None
-                if os.path.exists(profile_path):
-                    try:
-                        with open(profile_path, "r", encoding="utf-8") as f:
-                            profile = json.load(f)
-                    except Exception:
-                        pass
-                
-                register_repo(
-                    repo_id=repo_id,
-                    repo_path=repo_path,
-                    vector_store=vector_store,
-                    repo_profile=profile
-                )
-                print(f"[+] Loaded and registered existing vector store for {repo_id}")
-                decision["vector_store_loaded"] = True
-                
-                # Ensure indices file exists (create if missing)
-                indices_file = os.path.join(INDICES_STORE_DIR, repo_id, "indices.json")
-                if not os.path.exists(indices_file):
-                    fingerprint = profile.get("fingerprint") if profile else None
-                    accuracy = profile.get("accuracy") if profile else None
-                    create_indices_file(repo_id, vector_store, fingerprint, accuracy)
-            else:
-                print(f"[!] No vector store found for {repo_id}")
-                decision["vector_store_loaded"] = False
-        except Exception as e:
-            print(f"[!] Error loading vector store for {repo_id}: {e}")
-            decision["vector_store_loaded"] = False
-
-        return decision
-
+        vector_store = VectorStore.load(repo_id=repo_id)
+        if vector_store is not None:
+            register_repo(repo_id=repo_id, repo_path=repo_path,
+                          vector_store=vector_store, repo_profile=old_profile)
+            create_indices_file(repo_id, vector_store, current_fingerprint, old_profile.get("accuracy"))
+            decision = {
+                "repo_id": repo_id, "action": "skipped", "reason": "No changes detected",
+                "fingerprint": current_fingerprint, "timestamp": datetime.utcnow().isoformat(),
+                "vector_store_loaded": True,
+            }
+            decision_path = str(contained_path(repo_profile_dir, "index_decision.json"))
+            with open(decision_path, "w", encoding="utf-8") as f:
+                json.dump(decision, f, indent=2)
+            return decision
+        # A matching profile alone does not establish a usable persisted index.
+        _VECTOR_STORES.pop(repo_id, None)
 
     print(f"\n[*] INDEXING STARTED -> {repo_id}")
 
@@ -424,34 +390,7 @@ def index_repo(req: IndexRequest):
         file_path = doc["metadata"].get("file_path", "").lower()
         # Look for accuracy mentions in Python files or config files
         if file_path.endswith((".py", ".yaml", ".yml", ".json", ".config")):
-            text = doc["text"]
-            # Look for accuracy patterns in code
-            import re
-            # Match patterns like: accuracy = 0.4, accuracy: 0.4, accuracy=0.4, accuracy 0.4
-            # Also match: accuracy = 0.948 (decimal) or accuracy: 94.8% (percentage)
-            patterns = [
-                r'accuracy[:\s=]+(\d{1,3}(?:\.\d+)?\s*%)',  # Percentage format: 94.8%
-                r'accuracy[:\s=]+(0\.\d{1,4})',  # Decimal format: 0.948 or 0.4
-                r'accuracy[:\s=]+(\d{1,3}(?:\.\d+)?)\s*(?:percent|%)',  # With word "percent"
-            ]
-            
-            for pattern in patterns:
-                accuracy_match = re.search(pattern, text, re.IGNORECASE)
-                if accuracy_match:
-                    value = accuracy_match.group(1).strip()
-                    # Convert decimal to percentage if needed
-                    try:
-                        float_val = float(value.replace('%', ''))
-                        # If it's a decimal (0.0 to 1.0), convert to percentage
-                        if 0 <= float_val <= 1 and '%' not in value:
-                            accuracy = f"{float_val * 100:.1f}%"
-                        else:
-                            # Already a percentage or > 1, keep as is
-                            accuracy = value if '%' in value else f"{value}%"
-                    except ValueError:
-                        accuracy = value
-                    break
-            
+            accuracy = extract_accuracy(doc["text"])
             if accuracy:
                 break
 

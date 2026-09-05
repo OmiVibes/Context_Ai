@@ -109,20 +109,31 @@ class VectorStore:
         if not os.path.exists(faiss_path) or not os.path.exists(meta_path):
             return None
 
-        index = faiss.read_index(faiss_path)
-
-        with open(meta_path, "rb") as f:
-            data = pickle.load(f)
-
-        store = VectorStore.__new__(VectorStore)
-        store.embeddings = data["embeddings"]
-        store.documents = data["documents"]
-        store.metadatas = data["metadatas"]
-        store.index = index
-
-        # Rebuild BM25 exactly like __init__()
-        store.bm25 = BM25Okapi(
-            [doc.lower().split() for doc in store.documents]
-        )
-
-        return store
+        try:
+            index = faiss.read_index(faiss_path)
+            with open(meta_path, "rb") as f:
+                data = pickle.load(f)
+            if not isinstance(data, dict):
+                return None
+            embeddings = np.asarray(data["embeddings"], dtype="float32")
+            documents = data["documents"]
+            metadatas = data["metadatas"]
+            if (embeddings.ndim != 2 or not embeddings.shape[0]
+                    or embeddings.shape != (index.ntotal, index.d)
+                    or not np.isfinite(embeddings).all()
+                    or not isinstance(documents, list) or not isinstance(metadatas, list)
+                    or len(documents) != index.ntotal or len(metadatas) != index.ntotal
+                    or not all(isinstance(doc, str) and doc.strip() for doc in documents)
+                    or not all(isinstance(meta, dict) for meta in metadatas)):
+                return None
+            store = VectorStore.__new__(VectorStore)
+            store.embeddings = data["embeddings"]
+            store.documents = documents
+            store.metadatas = metadatas
+            store.index = index
+            store.bm25 = BM25Okapi([doc.lower().split() for doc in documents])
+            return store
+        except (OSError, RuntimeError, EOFError, pickle.UnpicklingError, KeyError, TypeError, ValueError, ImportError, AttributeError):
+            # Trusted local artifacts may be incomplete after an interrupted save.
+            # Returning None lets /index rebuild; path validation remains outside.
+            return None

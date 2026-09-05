@@ -1,69 +1,58 @@
-**Context Assist safety and correctness repair ? 5 September 2026**
+**Context Assist remaining audit fixes - 5 September 2026**
 
-The requested high-priority repairs are implemented. This remains a prototype with known lower-priority defects and a GitHub credential problem; it is not fully production-ready.
+Continued from pushed baseline `721daa5c9c1393378ce82b7a5e1edc0691a00a78`. Previous safety/error/MCP fixes were retained. No architecture redesign or next-phase product features were added.
 
-| Validation | Before | After |
+| Validation | Previous | Current |
 |---|---|---|
-| Original 74-check audit | 42 passed / 32 failed | 62 passed / 12 failed |
-| New deterministic regression suite | Not present | 42 passed / 0 failed |
+| Same 74 audit checks | 62 passed / 12 failed | **70 passed / 0 code failures / 4 externally blocked** |
+| Deterministic regression suite | 42 passed / 0 failed | **65 passed / 0 failed** |
 
-The 74 checks mix smoke tests, behavior assertions, failure injection and live integrations. Counts are not a coverage percentage or a count of independent root causes. No original audit check was removed. Two expectations were adapted to the intentionally corrected contracts: dirty Git sync may safely refuse with an exception, and embedding failure must raise a structured 503 rather than return an ordinary answer. GitHub success checks remain failures; they were not redefined as passing error-handling checks.
+All eight code-related audit failures are resolved. Four live GitHub checks still cannot succeed because GitHub rejects the configured token. They are explicitly BLOCKED, not passed. No assertions were removed or weakened. In binary pass/non-pass terms this is 70/4; it is not 74/74. The original audit mixes smoke checks, behavioral assertions, fault injection and live integrations; these counts are not a coverage percentage.
 
-**Repairs completed**
+**Each of the 12 baseline failures**
 
-- Indexing preserves README, LICENSE, documentation and source files. Documentation remains logically excluded by the existing loader. Source reads skip symlinks/Windows junctions that escape the selected repository.
-- Shared Git sync detects staged, unstaged and untracked work, verifies origin/upstream, and uses fast-forward-only updates. It refuses upstream file deletions and prevents overwriting ignored local files. No reset, clean, forced checkout or recursive repository deletion remains in the sync implementations. The legacy backup.py sync wrapper now uses the same safe implementation; its other legacy endpoints were not modernized.
-- Repository IDs reject Unix/Windows paths, drive-relative paths, encoded traversal and Windows special names. Canonical containment checks cover repository lookup, vector files, profile files and index/chunk output paths. Invalid HTTP IDs receive 400; MCP invalid parameters use JSON-RPC errors.
-- Architecture responses no longer invent tumor/CNN workflows. They return observed source/configuration paths from the selected repository, and state that paths alone are insufficient to infer responsibilities or data flow. Empty repositories receive an explicit insufficient-evidence answer. Two unrelated repository fixtures prove isolation.
-- Model/service unavailability and memory errors return structured 503 responses; timeouts return 504; unexpected failures return 500. The RAG client and /ask propagate these errors instead of presenting them as successful answers. Query embedding outages are also distinguishable from absent evidence.
-- Package imports and the LLM launcher work from the project root. LLM_DEFAULT_MODEL selects the default; LLM_FALLBACK_MODEL optionally selects an installed local fallback. Fallback is allowed only for missing-model/memory failures on implicit default requests, never for explicitly requested models or cloud models. No downloads occur.
-- Shared greeting detection avoids treating words like history as hi. API and MCP greetings work without a repository. New questions replace stale pending selections; successful selection clears pending state; explicit repo names override active selection and group-name matches. In-memory selection is isolated by session and is not persisted to disk.
-- GitHub configuration is loaded consistently, requests have a timeout, and missing/invalid credentials yield useful structured messages without leaking tokens. Authentication is not bypassed. /health/github reports configuration presence only, not token validity. UI owner/repository values come from the entered URL.
-- MCP supports standard initialize/version negotiation, ping, tools/list with schemas, tools/call with content/isError, notification silence, and JSON-RPC error codes/request IDs. Newline-delimited requests work without closing stdin; existing custom call/* methods and one-shot EOF requests still work. Streamlit reads subprocess pipes through communicate with a timeout and displays structured errors.
-- The required repo_profiles/extractor.py is now tracked; generated profile data remains ignored. The extractor validates output paths and retains README metadata because sync preserves documentation.
+| Failure | Root cause and fix | Regression evidence | Final status |
+|---|---|---|---|
+| Fenced-code cleanup | A greedy regex deleted fenced code. The cleaner removes paired fence lines while preserving their code, indentation and newlines. Inline backticks and unclosed fences are retained. | Exact audit example, Python/JS/SQL, tilde fences, longer outer fences, prose, inline and unclosed examples. | PASS |
+| Unicode preservation | The emoji regex covered unrelated Unicode ranges; NFKC and lossy decoding changed source values. Cleaning now preserves Unicode and whitespace; source/profile readers use strict UTF-8. | Hindi, Chinese, Japanese, accented Latin, arrows, check marks, emoji and combining marks survive read/clean/chunk/embedding input/vector persistence/retrieval; Unicode README metadata survives. | PASS |
+| JSON password masking | Assignment regexes missed structured JSON keys and could consume unrelated text. Nested objects/lists are parsed and sensitive keys are redacted; config assignment masking preserves delimiters and adjacent fields. | password/passwd/token/api_key/apiKey/secret/access_token, nested structures, escaped strings, ordinary descriptions and existing recognizable token patterns. | PASS |
+| Percent-word accuracy | The metric parser only recognized percent symbols or decimal fractions. It now accepts percent words before/after accuracy and avoids reading 0.5 percent as 50 percent. API indexing uses the shared parser. | Exact 94.8 percent failure, 95%, accuracy of 95%, 95 percent accuracy, decimal formats and actual index profile output. | PASS |
+| Missing/invalid saved index | A matching profile fingerprint returned skipped even when vectors were unavailable. A skip now requires a validated load; missing, corrupt, inconsistent or unreadable artifacts trigger rebuilding. | Missing FAISS/metadata, invalid bytes, inconsistent counts, unreadable metadata, failed rebuild/retry, retrieval after recovery, README bytes preserved. | PASS |
+| Fingerprint content detection | Size and integer mtime missed rapid edits. SHA-256 now hashes eligible relative paths and content using the same file selection as ingestion. | Same-size/same-time edits, adds/deletes/renames, unchanged content at different times/locations, ignored/generated files, no unnecessary rebuild. | PASS |
+| Closed issues shown as active risks | The keyword heuristic did not inspect state. Only open non-PR issues are now considered active risks. | Mocked open bug, closed fixed bug and open pull request. | PASS |
+| Malformed webhook signatures | Unchecked split raised ValueError. The verifier validates scheme and exact hex length before constant-time comparison. | Valid, tampered, missing, malformed, wrong scheme, nonhex and extra-separator signatures; 400/401 responses. | PASS |
+| GitHub milestone fetch | Live GitHub rejects existing credentials. Existing credential-safe error handling remains correct. | Live authentication failure plus mocked authenticated success. | BLOCKED: external credential |
+| GitHub risk fetch | Same live credential failure. | Live failure; successful mocked issue fetch/risk generation. | BLOCKED: external credential |
+| UI Milestones button | The backend reports the same GitHub authentication failure. UI remains stable and displays a useful message. | Actual Streamlit AppTest button plus existing routing/error-display tests. | BLOCKED: external credential |
+| UI Risks button | Same backend authentication blocker. | Actual button plus existing UI/error tests. | BLOCKED: external credential |
 
-MCP implementation references: [lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools), [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports). This is the tools/stdio subset used by this project, not a claim of implementing every optional MCP feature or cancellation of an in-flight synchronous operation.
+**Indexing and text-handling details**
 
-**Configuration and live validation**
+- Fingerprints and ingestion share eligible-source rules. They exclude .git internals, virtual environments, dependencies, caches, generated chunk/index/profile data and cloned-repo/vector artifacts. Actual Git ignore rules (including negation) apply in both Git checkouts and archives containing .gitignore. Archive rules are interpreted using disposable Git metadata outside the source; the archive is never initialized or changed.
+- Fingerprints use relative names and content, not mtime or absolute location. An ingestion-version prefix invalidates old fingerprints so an explicit reindex applies the repaired cleaning rules. Existing stores are not mass-rebuilt during this task; the local launcher still disables startup scanning.
+- Vector loading verifies embedding shape, finite values, document/metadata counts and types. Invalid trusted local artifacts return unavailable so /index can rebuild; canonical path validation still raises on unsafe paths. Source repositories are never deleted during recovery. An embedding failure during recovery remains a real non-2xx error, not a successful index result.
+- Existing whitespace-oriented chunk boundaries and retrieval ranking were not redesigned. Unicode character values survive the tested path, but the existing chunker still flattens some source formatting. Secret masking is best-effort: recognized JSON keys, common config assignments, known token signatures and opaque high-entropy tokens are covered; this is not a claim of detecting every possible secret format. Ordinary long identifiers are no longer treated as secrets merely for having high entropy.
+- Invalid UTF-8 raises a decode error instead of silently removing bytes. No lossy ASCII conversion or errors="ignore" workaround was introduced.
 
-The committed default remains qwen2.5:7b. This machine's ignored .env now sets LLM_DEFAULT_MODEL=llama3.2:1b, an already installed model verified by the earlier audit. Optional fallback is disabled in this local configuration; fallback behavior is covered with deterministic mocks. An earlier live rerun with the larger default plus optional fallback encountered an intermittent engine failure, so the final 74-check run uses the explicitly configured smaller default. No credential values were changed or committed.
+**GitHub environment block and configuration**
 
-With that configuration, live embeddings, API indexing of a temporary repository, MCP local-Git rebuild, grounded calculator answers with source metadata, persisted-index reload, and the original RAG smoke script complete. Passing the old RAG smoke script means no runtime error was returned; its printed answer is not a rigorous answer-quality evaluation. The smaller model can still add unsupported or unnecessary commentary. Broad correctness/grounding evaluation remains future work.
+Live read-only issue calls return GitHub authentication errors. The application uses the configured credential and does not retry anonymously. Error handling and successful logic are independently covered by mocked tests; the four blocked checks remain visible in the audit output and ledger.
 
-API, LLM and Streamlit were restarted and left running on 127.0.0.1 ports 8000, 9001 and 8501. API startup scanning remains disabled by its launcher (--lifespan off). All indexing/deletion/dirty-Git/security reproductions used temporary repositories. Existing repositories and the pre-existing Postman edit were preserved; that Postman edit is excluded from this commit.
+During final verification, one milestone fetch also encountered a transient connectivity error and was correctly recorded as FAIL. The affected audit script was rerun without changing its assertions or broadening the BLOCKED classification; its earlier output remains in the ignored local `audit/run_connectivity_retry.log`.
 
-**Exactly which original audit checks still fail**
+Supply a valid token with access to the selected repository through `GITHUB_TOKEN` in the ignored project-root `.env`, or securely inject the variable into the process environment. Never put the token in source code, a repository URL, a command committed to Git, or a test fixture. Restart the API/UI processes after configuration changes. `/health/github` reports configuration presence only; it does not claim token validity. Then rerun all three audit scripts to verify live Milestones/Risks access. Existing credentials were not printed, replaced, or committed in this task.
 
-| Check | Remaining cause |
-|---|---|
-| fenced source survives embedding cleanup | Embedding cleanup still removes fenced code; deferred preprocessing repair. |
-| Unicode code preserved | Existing emoji regex removes some non-emoji Unicode, including Chinese. |
-| JSON password masking | Existing masking patterns do not cover the JSON password fixture. |
-| percent-word accuracy extraction | The documented 94.8 percent format remains unsupported. |
-| missing vector index self-heals | Unchanged fingerprint can skip rebuilding a missing FAISS artifact. |
-| fingerprint detects content changes | Same-size/same-timestamp content changes can be missed. |
-| closed issues excluded from current risks | Closed fixed bugs still count as risks in the keyword heuristic. |
-| GitHub milestone issue fetch | Existing token is rejected by GitHub; now a clear configuration error. |
-| GitHub risk issue fetch | Same credential blocker. |
-| webhook malformed signature handling | Malformed signature still raises ValueError; outside the requested integration fixes. |
-| UI milestones tab real button | Live GitHub authentication still fails; UI displays the new clear message. |
-| UI risks tab real button | Same credential blocker. |
+The local configured model remains `llama3.2:1b`; no model/config changes were made in this task. API, separated LLM service and UI are available on local ports 8000, 9001 and 8501, with automatic API indexing disabled. Live embedding, indexing, MCP, generation, saved-index reload and Postman replay tests still pass. Passing smoke tests does not establish broad answer quality: the small model may add unsupported commentary, and richer grounding/citations remain future product work.
 
-Four failures reflect one external authentication blocker. A valid GITHUB_TOKEN with repository access is needed to verify successful Milestones/Risks operation. Mocked authentication-failure tests pass. No private-repository credentials were guessed, printed, replaced, or committed.
+**Tests and reproduction**
 
-Other known limitations remain: hybrid search loops through all embeddings instead of querying FAISS; two profile layouts and CWD-relative stores coexist; pickle metadata assumes trusted local storage; the API has no authentication or session expiry; GitHub issue pagination/PR filtering and actual milestone retrieval remain incomplete; chunk formatting and citation scope are limited. No selector UI, persistent chat storage, richer citations, progress UI or other feature work was added.
+The original 42 regression tests still pass. Three new test modules add 23 tests:
 
-**Regression tests added**
+- `tests/test_content_edges.py`: 11 tests covering fences, Unicode, strict decoding, redaction and metrics.
+- `tests/test_index_recovery.py`: 9 tests covering recovery, retries, incremental hashing and ignore rules.
+- `tests/test_github_edges.py`: 3 tests covering active risks, authenticated mocked success and webhook signatures.
 
-| File | Tests | Coverage |
-|---|---:|---|
-| tests/test_safety.py | 8 | Byte preservation, dirty Git, clean fast-forward, upstream deletion refusal, legacy invalid directory preservation, traversal, Windows junctions and source/storage containment. |
-| tests/test_inference.py | 12 | Engine/HTTP/transport failures, status propagation, configurable default, explicit-model behavior, installed-only fallback, cloud exclusion and embedding outages. |
-| tests/test_questions.py | 7 | Greetings, stale pending questions, explicit selection phrases, session isolation/switching, repo/group detection and architecture isolation. |
-| tests/test_integrations.py | 13 | GitHub configuration/auth/timeout, MCP negotiation/discovery/custom and standard calls/errors/notifications, traversal and real stdio/EOF subprocess behavior. |
-| tests/test_ui.py | 2 | URL-derived GitHub routing, structured error display and subprocess timeout cleanup. |
-
-Tests use unittest, unittest.mock, temporary directories, FastAPI TestClient and Streamlit AppTest already available in the environment. No new runtime dependency was added.
+The earlier suite still verifies README/docs and local-edit preservation, traversal/junction rejection, architecture isolation, inference status propagation, default/fallback model behavior, session selection, GitHub errors and MCP stdio/custom/standard calls.
 
 ```powershell
 .\venv\Scripts\python.exe -X utf8 -m unittest discover -s tests -v
@@ -72,91 +61,89 @@ Tests use unittest, unittest.mock, temporary directories, FastAPI TestClient and
 .\venv\Scripts\python.exe -X utf8 audit/check_end_to_end.py
 ```
 
-The regression suite requires no live model or GitHub token. Audit scripts require local services and models, perform read-only GitHub calls, and record outcomes individually rather than exiting on the first failure. Inspect the reported outcomes; a zero audit-script exit is not an all-green assertion. Raw results/logs and generated test data are ignored and excluded from the commit. Git diff/secret/artifact checks and the final suite are run before committing.
+No runtime dependencies were added. Git is used for exact ignore-rule interpretation. All mutation/recovery tests use temporary repositories/directories. Raw result JSON, logs, generated indexes and temporary fixtures remain ignored. Audit scripts label only recognized live authentication/configuration failures as BLOCKED; other failures remain FAIL. No success assertions were relaxed. A zero audit-script exit alone does not mean all checks passed; read its result statuses.
 
-**Files changed for this task**
+**Files changed**
 
-- Safety/data access: app.py, backup.py, github/repo_sync.py, app_processing/file_loader.py, vector_store/store.py, repo_profiles/extractor.py, utils/repo_paths.py, .gitignore.
-- Inference/errors: app_processing/embeddings.py, llm_service/server.py, llm_service/core.py, llm_service/engine_router.py, llm_service/engines/ollama.py, rag/local_llm.py, rag/core.py, utils/errors.py, run_llm_detached.py.
-- Questions/architecture: rag/repo_structure.py, rag/repo_detector.py, rag/router.py, utils/questions.py, with session changes in app.py.
-- GitHub/MCP/UI: github/api.py, rag/milestones.py, rag/risk.py, mcp/server.py, mcp/schemas.py, ui/streamlit_app.py.
-- Documentation/tests: README.md, this report, the three repeatable audit scripts, and the five regression test files listed above.
+`app.py`; `app_processing/embeddings.py`; `app_processing/file_loader.py`; `app_processing/file_reader.py`; `github/webhook.py`; `rag/metrics_extractor.py`; `rag/risk.py`; `repo_profiles/extractor.py`; `utils/project_fingerprint.py`; `vector_store/store.py`; `audit/run_audit.py`; `audit/check_integrations.py`; `audit/PROJECT_AUDIT.md`; `README.md`; and the three new regression modules listed above.
 
-**Final original-audit check ledger**
+The user's unrelated Postman edit is preserved and excluded from the commit. No .env, credentials, model files, virtual environments, caches, generated indexes, test artifacts or local logs are included. Remaining broader limitations (trusted pickle metadata, lack of API authentication/session expiry, first-page GitHub issue retrieval, heuristic milestones, answer grounding and citation detail) are outside this audit-fix task.
 
-| Check | Result | Mode |
-|---|---|---|
-| Python syntax | PASS | deterministic |
-| API health | PASS | live HTTP |
-| API OpenAPI | PASS | live HTTP |
-| LLM docs | PASS | live HTTP |
-| UI HTTP | PASS | live HTTP |
-| UI health | PASS | live HTTP |
-| README LLM module import | PASS | deterministic |
-| ask greeting | PASS | ASGI actual handlers |
-| ask empty | PASS | ASGI actual handlers |
-| ask missing fields | PASS | ASGI actual handlers |
-| index empty | PASS | ASGI actual handlers |
-| index missing repo | PASS | ASGI actual handlers |
-| index missing fields | PASS | ASGI actual handlers |
-| unknown endpoint | PASS | ASGI actual handlers |
-| technical question not mistaken for greeting | PASS | deterministic |
-| fenced source survives embedding cleanup | FAIL | deterministic |
-| Unicode code preserved | FAIL | deterministic |
-| assignment secret masking | PASS | deterministic |
-| JSON password masking | FAIL | deterministic |
-| chunk length bound | PASS | deterministic |
-| empty chunk input | PASS | deterministic |
-| decimal accuracy extraction | PASS | deterministic |
-| percent-word accuracy extraction | FAIL | deterministic |
-| real default LLM generation | PASS | live local qwen2.5:7b |
-| missing model produces HTTP error | PASS | live HTTP |
-| source/notebook ingestion and excluded files | PASS | deterministic |
-| architecture grounded in calculator fixture | PASS | deterministic |
-| real embeddings, vector persistence and retrieval | PASS | live local embedding model |
-| real indexing pipeline | PASS | temporary fixture + live embeddings |
-| index preserves README | PASS | deterministic |
-| repeat index skips unchanged input | PASS | deterministic |
-| third index skips unchanged input | PASS | deterministic |
-| deterministic metadata answer | PASS | deterministic |
-| real grounded RAG answer with sources | PASS | live embeddings + default LLM |
-| repo detection by name | PASS | deterministic |
-| repo detection by filename | PASS | deterministic |
-| session clarification and repo selection | PASS | deterministic |
-| session retains selected repository | PASS | deterministic |
-| missing vector index self-heals | FAIL | deterministic |
-| fingerprint detects content changes | FAIL | deterministic |
-| index rejects repository path traversal | PASS | temporary fixture only |
-| embedding outage distinguishable from missing evidence | PASS | fault injection |
-| multi-repository response/source wiring | PASS | mock embeddings and LLM |
-| MCP custom tool discovery | PASS | real subprocess |
-| MCP chat greeting | PASS | real subprocess |
-| MCP unknown method reports JSON-RPC error | PASS | real subprocess |
-| MCP standard initialize | PASS | real subprocess |
-| MCP standard tools/call | PASS | real subprocess |
-| Streamlit rendering and chat interaction | PASS | Streamlit AppTest + real MCP |
-| milestone label grouping | PASS | mock GitHub issues |
-| closed issues excluded from current risks | FAIL | mock GitHub issues |
-| GitHub milestone issue fetch | FAIL | live read-only GitHub |
-| GitHub risk issue fetch | FAIL | live read-only GitHub |
-| webhook valid and tampered signatures | PASS | deterministic |
-| webhook malformed signature handling | FAIL | deterministic |
-| fresh clone contains profile extractor | PASS | deterministic |
-| Postman route alignment | PASS | deterministic |
-| Git clone basic operation | PASS | fixture |
-| Git sync preserves README and LICENSE | PASS | fixture |
-| Git sync preserves local edits | PASS | fixture |
-| Git sync isolated integration | PASS | fixture |
-| UI milestones tab real button | FAIL | AppTest + real MCP/GitHub |
-| UI risks tab real button | FAIL | AppTest + real MCP/GitHub |
-| MCP rebuild missing inputs rejected | PASS | real subprocess, no Git writes |
-| explicit frontend selection stays in one repo | PASS | fixture |
-| original vector-store smoke script | PASS | fixture |
-| GitHub change extraction and deduplication | PASS | fixture |
-| installed smaller LLM fallback | PASS | live local llama3.2:1b; no config change |
-| complete MCP rebuild | PASS | temporary local Git + real embeddings |
-| MCP rebuilt profile retains project metadata | PASS | temporary local Git fixture |
-| complete RAG with smaller installed model | PASS | real embeddings/retrieval/LLM; model override in audit process only |
-| RAG lazy reload from persisted MCP index | PASS | real disk reload/embeddings/LLM; audit model override |
-| Postman live read/query replay HTTP checks | PASS | real HTTP; temporary session IDs |
-| original RAG smoke script answer check | PASS | real default pipeline; no indexing writes |
+**All 74 audit checks**
+
+| Check | Result |
+|---|---|
+| Python syntax | PASS |
+| API health | PASS |
+| API OpenAPI | PASS |
+| LLM docs | PASS |
+| UI HTTP | PASS |
+| UI health | PASS |
+| README LLM module import | PASS |
+| ask greeting | PASS |
+| ask empty | PASS |
+| ask missing fields | PASS |
+| index empty | PASS |
+| index missing repo | PASS |
+| index missing fields | PASS |
+| unknown endpoint | PASS |
+| technical question not mistaken for greeting | PASS |
+| fenced source survives embedding cleanup | PASS |
+| Unicode code preserved | PASS |
+| assignment secret masking | PASS |
+| JSON password masking | PASS |
+| chunk length bound | PASS |
+| empty chunk input | PASS |
+| decimal accuracy extraction | PASS |
+| percent-word accuracy extraction | PASS |
+| real default LLM generation | PASS |
+| missing model produces HTTP error | PASS |
+| source/notebook ingestion and excluded files | PASS |
+| architecture grounded in calculator fixture | PASS |
+| real embeddings, vector persistence and retrieval | PASS |
+| real indexing pipeline | PASS |
+| index preserves README | PASS |
+| repeat index skips unchanged input | PASS |
+| third index skips unchanged input | PASS |
+| deterministic metadata answer | PASS |
+| real grounded RAG answer with sources | PASS |
+| repo detection by name | PASS |
+| repo detection by filename | PASS |
+| session clarification and repo selection | PASS |
+| session retains selected repository | PASS |
+| missing vector index self-heals | PASS |
+| fingerprint detects content changes | PASS |
+| index rejects repository path traversal | PASS |
+| embedding outage distinguishable from missing evidence | PASS |
+| multi-repository response/source wiring | PASS |
+| MCP custom tool discovery | PASS |
+| MCP chat greeting | PASS |
+| MCP unknown method reports JSON-RPC error | PASS |
+| MCP standard initialize | PASS |
+| MCP standard tools/call | PASS |
+| Streamlit rendering and chat interaction | PASS |
+| milestone label grouping | PASS |
+| closed issues excluded from current risks | PASS |
+| GitHub milestone issue fetch | BLOCKED |
+| GitHub risk issue fetch | BLOCKED |
+| webhook valid and tampered signatures | PASS |
+| webhook malformed signature handling | PASS |
+| fresh clone contains profile extractor | PASS |
+| Postman route alignment | PASS |
+| Git clone basic operation | PASS |
+| Git sync preserves README and LICENSE | PASS |
+| Git sync preserves local edits | PASS |
+| Git sync isolated integration | PASS |
+| UI milestones tab real button | BLOCKED |
+| UI risks tab real button | BLOCKED |
+| MCP rebuild missing inputs rejected | PASS |
+| explicit frontend selection stays in one repo | PASS |
+| original vector-store smoke script | PASS |
+| GitHub change extraction and deduplication | PASS |
+| installed smaller LLM fallback | PASS |
+| complete MCP rebuild | PASS |
+| MCP rebuilt profile retains project metadata | PASS |
+| complete RAG with smaller installed model | PASS |
+| RAG lazy reload from persisted MCP index | PASS |
+| Postman live read/query replay HTTP checks | PASS |
+| original RAG smoke script answer check | PASS |
