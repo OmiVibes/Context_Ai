@@ -8,6 +8,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import app
+from utils.session_store import SessionStore
 
 
 class ProductControlTests(unittest.TestCase):
@@ -28,6 +29,7 @@ class ProductControlTests(unittest.TestCase):
                    patch.object(app, "WORKSPACE_ROOT", str(self.workspace)),
                    patch.object(app, "PROJECT_CONTEXT_DIR", str(self.root / "tool")),
                    patch.object(app, "PROFILE_DIR", str(self.root / "profiles")),
+                   patch.object(app, "SESSION_STORE", SessionStore(self.root / "sessions.sqlite3")),
                    patch.object(app.VectorStore, "load", return_value=None),
                    patch.object(app, "_models_from_service", return_value={"default_model": "small", "models": ["small", "larger"]})]
         for item in patches:

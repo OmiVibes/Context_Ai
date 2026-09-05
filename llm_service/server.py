@@ -31,3 +31,13 @@ def models():
     default = os.getenv("LLM_DEFAULT_MODEL", "qwen2.5:7b")
     available = installed_local_models()
     return {"default_model": default, "models": available}
+
+
+@app.get("/health")
+def health():
+    try:
+        models = installed_local_models()
+        return {"status": "ready", "backend": "ready", "models_available": len(models)}
+    except InferenceError:
+        # The service process is alive even when its local engine cannot be reached.
+        return {"status": "degraded", "backend": "unavailable", "models_available": 0}

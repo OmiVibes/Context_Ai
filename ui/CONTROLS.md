@@ -22,12 +22,13 @@ An unavailable model is rejected before it is sent to inference. A selected mode
 passed through the existing RAG HTTP client to the inference API; the API service,
 not Streamlit or RAG, owns engine/model execution and fallback behavior.
 
-Session state is intentionally process-local and held in memory: selected repository,
-selected model, pending repository selection, and up to `CHAT_HISTORY_TURNS` ordered
-turns (default 10). A turn stores the user question, returned answer, repository,
-model, and source metadata, never the full retrieved prompt/context or credentials.
-After a process restart, start a new chat. **New Chat** clears turns and a pending
-question but retains the selected repository and model.
+Session state persists in local SQLite: selected repository, selected model, pending
+repository selection, and ordered turns. `CHAT_HISTORY_TURNS` (default 10) bounds
+the recent turns active after a load and used for follow-up clarification; it never
+sends the stored conversation to the LLM. A turn stores the user question, returned
+answer, repository, model, and source metadata, never full retrieved prompt/context
+or credentials. **New Chat** clears turns and a pending question but retains selected
+repository and model. See [operations](../OPERATIONS.md) for storage and health details.
 
 For referential follow-ups such as “Where is that implemented?”, the latest user
 question can clarify the fresh retrieval query. Previous assistant output is never

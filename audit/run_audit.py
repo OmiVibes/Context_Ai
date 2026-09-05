@@ -154,6 +154,9 @@ with tempfile.TemporaryDirectory(prefix="context_assist_audit_") as tmp:
     app.PROFILE_DIR = str(project / 'repo_profiles')
     app.CHUNK_STORE_DIR = str(project / 'chunk_store')
     app.INDICES_STORE_DIR = str(project / 'indices_store')
+    from utils.session_store import SessionStore
+    original_session_store = app.SESSION_STORE
+    app.SESSION_STORE = SessionStore(base / 'sessions.sqlite3')
 
     def loader():
         docs = load_repo_files(str(repo))
@@ -251,6 +254,7 @@ with tempfile.TemporaryDirectory(prefix="context_assist_audit_") as tmp:
     check("multi-repository response/source wiring", multi, "mock embeddings and LLM")
     for key,value in originals.items():
         setattr(app,key,value)
+    app.SESSION_STORE = original_session_store
     core._VECTOR_STORES.clear()
     core._REPO_PATHS.clear()
     core._REPO_PROFILES.clear()

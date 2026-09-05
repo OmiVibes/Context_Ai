@@ -1,10 +1,13 @@
 import os
 import unittest
+from pathlib import Path
+import tempfile
 from unittest.mock import Mock, patch
 
 import requests
 from fastapi.testclient import TestClient
 import app
+from utils.session_store import SessionStore
 import rag.core as rag
 from rag.grounded import prepare_context, INSUFFICIENT
 from vector_store.store import VectorStore
@@ -16,6 +19,8 @@ def hit(text='def add(a, b): return a + b', score=.8, file='calculator.py', **me
 
 class GroundedTests(unittest.TestCase):
     def setUp(self):
+        self._session_tmp = tempfile.TemporaryDirectory(prefix='context_grounded_sessions_')
+        self.addCleanup(self._session_tmp.cleanup)
         self.store = Mock()
         self.store.search.return_value = [hit()]
         self.http = Mock(status_code=200)
@@ -23,6 +28,7 @@ class GroundedTests(unittest.TestCase):
         patches = [patch.dict(rag._VECTOR_STORES, {'demo': self.store}, clear=True),
                    patch.dict(rag._REPO_PROFILES, {}, clear=True),
                    patch.dict(app._SESSIONS, {}, clear=True),
+                   patch.object(app, 'SESSION_STORE', SessionStore(Path(self._session_tmp.name)/'sessions.sqlite3')),
                    patch.object(rag, 'load_repo_profile', return_value=None),
                    patch.object(rag, 'embed_query', return_value=[1., 0.]),
                    patch('rag.local_llm.requests.post', return_value=self.http),
@@ -31,7 +37,7 @@ class GroundedTests(unittest.TestCase):
                    patch.dict(os.environ, {'RAG_TOP_K': '5', 'RAG_MAX_CONTEXT_CHARS': '3000'})]
         self.mocks = [p.start() for p in patches]
         for p in patches: self.addCleanup(p.stop)
-        self.post = self.mocks[5]
+        self.post = self.mocks[6]
         self.client = TestClient(app.app, raise_server_exceptions=False)
 
     def ask(self, question='How does add work?'):

@@ -2,6 +2,8 @@ import os
 import sys
 import json
 import requests
+import logging
+import uuid
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -13,6 +15,8 @@ from app_processing.chunker import chunk_text
 from app_processing.embeddings import embed_texts
 from vector_store.store import VectorStore
 from utils.repo_paths import validate_repo_id, repo_path as safe_repo_path, contained_path, InvalidRepoId
+from utils.session_store import SessionStore, SessionStoreError
+from utils.request_context import request_id, current_request_id
 
 # Fix Windows console encoding for emojis
 if sys.platform == 'win32':
@@ -57,6 +61,26 @@ from utils.questions import is_generic_question, greeting_answer
 
 app = FastAPI(title="Project Context AI – Thin API")
 install_error_handlers(app)
+logger = logging.getLogger("context_assist.api")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
+
+
+@app.middleware("http")
+async def correlation_id(request, call_next):
+    value = (request.headers.get("X-Request-ID") or str(uuid.uuid4()))[:128]
+    token = request_id.set(value)
+    try:
+        response = await call_next(request)
+    finally:
+        request_id.reset(token)
+    response.headers["X-Request-ID"] = value
+    logger.info("request_id=%s action=http status=%s path=%s", value, response.status_code, request.url.path)
+    return response
 
 
 # -------------------------------------------------
@@ -160,6 +184,7 @@ class SessionSelection(BaseModel):
 # -------------------------------------------------
 _SESSIONS: Dict[str, Dict[str, Any]] = {}
 _INDEX_JOBS: Dict[str, Dict[str, Any]] = {}
+SESSION_STORE = SessionStore()
 
 
 def _history_limit() -> int:
@@ -169,13 +194,35 @@ def _history_limit() -> int:
         return 10
 
 
-def _record_turn(session: Dict[str, Any], question: str, result: Dict[str, Any], repo_id=None, model=None):
+def _session_for(session_id: str) -> Dict[str, Any]:
+    if session_id not in _SESSIONS:
+        try:
+            _SESSIONS[session_id] = SESSION_STORE.load(session_id, _history_limit())
+        except SessionStoreError as exc:
+            raise ServiceError("session_storage_unavailable", "Session storage is unavailable", 503) from exc
+    return _SESSIONS[session_id]
+
+
+def _save_session(session_id: str, session: Dict[str, Any]):
+    try:
+        SESSION_STORE.save_session(session_id, session)
+    except SessionStoreError as exc:
+        raise ServiceError("session_storage_unavailable", "Session storage is unavailable", 503) from exc
+
+
+def _record_turn(session_id: str, session: Dict[str, Any], question: str, result: Dict[str, Any], repo_id=None, model=None):
     if not isinstance(result, dict) or not result.get("answer"):
         return
+    turn = {"user": question, "assistant": result["answer"], "repository": repo_id,
+            "model": model, "sources": result.get("sources", [])}
     turns = session.setdefault("history", [])
-    turns.append({"user": question, "assistant": result["answer"], "repository": repo_id,
-                  "model": model, "sources": result.get("sources", [])})
+    turns.append(turn)
     del turns[:-_history_limit()]
+    try:
+        SESSION_STORE.append_turn(session_id, turn)
+        _save_session(session_id, session)
+    except SessionStoreError as exc:
+        raise ServiceError("session_storage_unavailable", "Session storage is unavailable", 503) from exc
 
 
 def _follow_up_question(question: str, session: Dict[str, Any]) -> str:
@@ -338,6 +385,40 @@ def health():
         "service": "Project Context AI",
         "mode": "development"
     }
+
+
+@app.get("/ready")
+def ready():
+    """Report bounded dependency state without making liveness depend on it."""
+    database = "ready" if SESSION_STORE.health() else "unavailable"
+    try:
+        response = requests.get(os.getenv("LLM_API_URL", "http://127.0.0.1:9001/generate").rsplit("/", 1)[0] + "/health", timeout=2)
+        llm = response.json().get("status", "unavailable") if response.status_code == 200 else "unavailable"
+    except (requests.RequestException, ValueError, TypeError):
+        llm = "unavailable"
+    from github.api import configuration_status
+    github = "configured" if configuration_status()["configured"] else "blocked"
+    vector = "ready" if os.path.isdir(os.path.join("vector_store", "repos")) else "not_initialized"
+    return {"api": "ready", "database": database, "llm_service": llm,
+            "vector_store": vector, "github": github}
+
+
+@app.get("/config")
+def configuration():
+    """Safe operational settings only; never serialize environment secrets."""
+    from github.api import configuration_status
+    llm_url = os.getenv("LLM_API_URL", "http://127.0.0.1:9001/generate")
+    try:
+        endpoint = requests.utils.urlparse(llm_url)
+        llm_endpoint = f"{endpoint.scheme}://{endpoint.netloc}"
+    except Exception:
+        llm_endpoint = "configured"
+    return {"default_model": os.getenv("LLM_DEFAULT_MODEL", "qwen2.5:7b"),
+            "rag_top_k": os.getenv("RAG_TOP_K", "5"),
+            "rag_max_context_chars": os.getenv("RAG_MAX_CONTEXT_CHARS", "3000"),
+            "chat_history_turns": _history_limit(), "llm_service": llm_endpoint,
+            "github_configured": configuration_status()["configured"],
+            "workspace_name": os.path.basename(os.path.normpath(WORKSPACE_ROOT))}
 
 
 # -------------------------------------------------
@@ -652,14 +733,19 @@ def models():
 
 @app.get("/sessions/{session_id}")
 def get_session(session_id: str):
-    session = _SESSIONS.get(session_id, {})
+    session = _session_for(session_id)
     return {"session_id": session_id, "repository": session.get("repo_id"),
             "model": session.get("model"), "history": session.get("history", [])}
 
 
+@app.get("/sessions/{session_id}/history")
+def get_session_history(session_id: str):
+    return {"session_id": session_id, "history": _session_for(session_id).get("history", [])}
+
+
 @app.put("/sessions/{session_id}")
 def select_session(session_id: str, selection: SessionSelection):
-    session = _SESSIONS.setdefault(session_id, {})
+    session = _session_for(session_id)
     if selection.repo_id is not None:
         repo_id = validate_repo_id(selection.repo_id)
         if repo_id not in _repository_ids():
@@ -671,15 +757,32 @@ def select_session(session_id: str, selection: SessionSelection):
         if selection.model not in available["models"]:
             raise HTTPException(status_code=400, detail={"code": "model_not_available", "message": "Selected model is not available"})
         session["model"] = selection.model
+    _save_session(session_id, session)
     return get_session(session_id)
 
 
 @app.delete("/sessions/{session_id}")
 def reset_session(session_id: str):
     # A new chat retains the user's explicit repository/model choices, not old turns or pending input.
-    session = _SESSIONS.get(session_id, {})
+    session = _session_for(session_id)
     _SESSIONS[session_id] = {key: session[key] for key in ("repo_id", "model") if key in session}
+    try:
+        SESSION_STORE.clear_history(session_id)
+    except SessionStoreError as exc:
+        raise ServiceError("session_storage_unavailable", "Session storage is unavailable", 503) from exc
+    _save_session(session_id, _SESSIONS[session_id])
     return get_session(session_id)
+
+
+@app.delete("/sessions/{session_id}/data")
+def delete_session_data(session_id: str):
+    """Permanently remove one explicitly named session and its visible history."""
+    try:
+        SESSION_STORE.delete(session_id)
+    except SessionStoreError as exc:
+        raise ServiceError("session_storage_unavailable", "Session storage is unavailable", 503) from exc
+    _SESSIONS.pop(session_id, None)
+    return {"session_id": session_id, "deleted": True}
 
 
 @app.post("/repositories/{repo_id}/reindex")
@@ -705,7 +808,7 @@ def ask(q: Query):
     user_input = q.user.strip()
     if not user_input:
         raise HTTPException(status_code=400, detail="'user' field cannot be empty")
-    session = _SESSIONS.setdefault(q.session_id, {})
+    session = _session_for(q.session_id)
     if q.repo_id is not None:
         explicit_repo = validate_repo_id(q.repo_id)
         if explicit_repo not in _repository_ids():
@@ -720,7 +823,7 @@ def ask(q: Query):
     if is_generic_question(user_input):
         session.pop("question", None)
         result = greeting_answer()
-        _record_turn(session, user_input, result, session.get("repo_id"), session.get("model"))
+        _record_turn(q.session_id, session, user_input, result, session.get("repo_id"), session.get("model"))
         return result
 
     available_repos = get_all_available_repos(base_dir=BASE_DIR)
@@ -750,7 +853,7 @@ def ask(q: Query):
                                 show_sources=q.show_sources, show_confidence=q.show_confidence,
                                 model=session.get("model"))
             session["repo_id"] = repo_id
-            _record_turn(session, question, result, repo_id, session.get("model"))
+            _record_turn(q.session_id, session, question, result, repo_id, session.get("model"))
             return result
         if detection["status"] == "project_group":
             from rag.core import rag_answer_multi_repo
@@ -761,7 +864,7 @@ def ask(q: Query):
                                            model=session.get("model"))
             result["project_group"] = detection["project_base_name"]
             result["searched_repos"] = repos
-            _record_turn(session, question, result, repos, session.get("model"))
+            _record_turn(q.session_id, session, question, result, repos, session.get("model"))
             return result
     except (ServiceError, InvalidRepoId):
         raise
@@ -772,6 +875,7 @@ def ask(q: Query):
     if not available_repos:
         return {"message": "No repositories are currently indexed. Please index a repository first using the /index endpoint.", "available_repos": []}
     session["question"] = user_input
+    _save_session(q.session_id, session)
     repos_list = "\n".join(f"{i+1}. {repo}" for i, repo in enumerate(available_repos))
     return {"message": f"Which repository are you referring to?\n\n{repos_list}\n\nType the repository name.",
             "available_repos": available_repos}

@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import Mock, patch
 from fastapi.testclient import TestClient
 import app
+from utils.session_store import SessionStore
 import rag.core as core
 import rag.repo_detector as detector
 from rag.router import RouterAgent
@@ -20,6 +21,7 @@ class QuestionTests(unittest.TestCase):
             path=self.root/'indices_store'/repo;path.mkdir(parents=True)
             (path/'indices.json').write_text(json.dumps({'indexed_files':['main.py']}))
         p=patch.object(app,'BASE_DIR',str(self.root));p.start();self.addCleanup(p.stop)
+        p=patch.object(app,'SESSION_STORE',SessionStore(self.root/'sessions.sqlite3'));p.start();self.addCleanup(p.stop)
         app._SESSIONS.clear();self.addCleanup(app._SESSIONS.clear)
         self.c=TestClient(app.app)
         self.answer=patch.object(app,'rag_answer',side_effect=lambda **kw:{'answer':kw['question'],'repo':kw['repo_id']})

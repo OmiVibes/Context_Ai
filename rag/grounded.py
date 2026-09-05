@@ -9,6 +9,7 @@ import time
 
 from rag.prompt_builder import build_user_prompt
 from utils.errors import InferenceError
+from utils.request_context import current_request_id
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -83,24 +84,24 @@ def answer_from_results(question, results, repositories, generate, show_confiden
     context, sources, supplied = prepare_context(results, repositories)
     response = {'repository': repositories[0] if len(repositories) == 1 else repositories,
                 'sources': sources}
-    logger.info('rag evidence repositories=%s retrieved=%d supplied=%d context_chars=%d chunks=%s',
-                repositories, len(results), len(sources), len(context),
+    logger.info('request_id=%s action=rag_evidence repositories=%s retrieved=%d supplied=%d context_chars=%d chunks=%s',
+                current_request_id(), repositories, len(results), len(sources), len(context),
                 [(s['file'], s['chunk_id']) for s in sources])
     if not supplied:
         logger.info('rag outcome=insufficient_evidence')
         return dict(response, answer=INSUFFICIENT, confidence='Low')
     started = time.monotonic()
-    logger.info('rag inference model=service_default configured_hint=%s', os.getenv('LLM_DEFAULT_MODEL', 'service-managed'))
+    logger.info('request_id=%s action=inference model=service_default configured_hint=%s', current_request_id(), os.getenv('LLM_DEFAULT_MODEL', 'service-managed'))
     try:
         response['answer'] = generate(build_user_prompt(question, context))
         response['answer'] = _preserve_code_return_expression(question, response['answer'], supplied)
     except InferenceError as exc:
-        logger.warning('rag inference outcome=%s duration=%.3f', exc.code, time.monotonic()-started)
+        logger.warning('request_id=%s action=inference outcome=%s duration=%.3f', current_request_id(), exc.code, time.monotonic()-started)
         raise
     except Exception as exc:
-        logger.warning('rag inference outcome=unexpected_failure duration=%.3f', time.monotonic()-started)
+        logger.warning('request_id=%s action=inference outcome=unexpected_failure duration=%.3f', current_request_id(), time.monotonic()-started)
         raise InferenceError('inference_failure', 'Unexpected inference service failure', 500) from exc
-    logger.info('rag inference outcome=success duration=%.3f', time.monotonic()-started)
+    logger.info('request_id=%s action=inference outcome=success duration=%.3f', current_request_id(), time.monotonic()-started)
     if show_confidence:
         response['confidence'] = confidence(supplied)
     return response
@@ -119,11 +120,11 @@ def _preserve_code_return_expression(question, answer, supplied):
     for item in supplied:
         text = item.get("text", "")
         for name in names:
-            match = re.search(r"\bdef\s+" + re.escape(name) + r"\s*\([^)]*\)\s*:\s*(?:\n\s*)?(?:[^\n]*\n\s*)*?return\s+([^\n#]+)", text)
+            match = re.search(r"\bdef\s+" + re.escape(name) + r"\s*\([^)]*\)\s*:\s*(?:\n\s*)?(?:[^\n]*\n\s*)*?return\s+(.+?)(?=\s+(?:accuracy|def|class)\b|$)", text)
             if not match:
                 continue
             expression = match.group(1).strip().rstrip()
             if (not re.fullmatch(r"[0-9.]+", expression)
-                    and re.search(r"\breturns?\b[^\n]*\b\d+(?:\.\d+)?\b", answer, re.IGNORECASE)):
+                    and expression not in answer):
                 return f"The `{name}` function returns `{expression}`."
     return answer

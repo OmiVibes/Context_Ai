@@ -139,6 +139,13 @@ the existing safe indexing pipeline. Chat turns are bounded in memory by
 selected repository and model. See [UI controls](ui/CONTROLS.md) for API endpoints,
 status meanings, follow-ups, and persistence limits.
 
+Sessions now persist selected controls and visible chat turns in local SQLite across
+API restarts. Configure `SESSION_DB_PATH` if the default `runtime/sessions.sqlite3`
+does not suit deployment; runtime data remains ignored by Git. Use `/health` for API
+liveness, `/ready` for bounded dependency state, and `/config` for safe operational
+settings. [Operations](OPERATIONS.md) documents reset/delete behavior, degraded
+service behavior, correlation IDs, and the complete endpoint contract.
+
 Generated data such as virtual environments, caches, repository indexes, vector files, and local profiles are excluded from version control through `.gitignore`.
 
 Index fingerprints hash eligible relative paths and source content with SHA-256;

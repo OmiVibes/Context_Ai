@@ -3,6 +3,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 from utils.errors import InferenceError
+from utils.request_context import current_request_id
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 LLM_API_URL = "http://127.0.0.1:9001/generate"
@@ -14,6 +15,7 @@ def generate_answer(prompt: str, model: str = None) -> str:
         if model:
             payload["model"] = model
         response = requests.post(os.getenv("LLM_API_URL", LLM_API_URL), json=payload,
+            headers={"X-Request-ID": current_request_id()},
             timeout=float(os.getenv("LLM_CLIENT_TIMEOUT_SECONDS", "270")))
         if response.status_code >= 400:
             status = response.status_code if response.status_code in (500, 503, 504) else 500

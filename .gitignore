@@ -21,6 +21,7 @@ htmlcov/
 *.log
 *.sqlite
 *.db
+runtime/
 
 # Local audit outputs contain machine paths and generated fixture results.
 audit/*results.json
