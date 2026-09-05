@@ -1,180 +1,163 @@
-# Context AI
+# Context Assist
 
-Context AI is a local developer assistant that indexes software repositories and answers project-specific questions with retrieval-augmented generation. It combines file loading, chunking, embeddings, vector search, repository profiling, MCP tooling, FastAPI endpoints, and a Streamlit UI.
+Context Assist is a local, repository-aware developer assistant. It indexes selected project files, retrieves relevant code and documentation, applies deterministic evidence gating, and asks a local model to answer from that evidence with source citations. It supports project exploration and developer assistance; results depend on the indexed repository and local model.
 
-## Features
+## What it does
 
-- Index local or GitHub repositories into searchable chunks
-- Generate embeddings and store vectors with FAISS
-- Ask natural-language questions about indexed codebases
-- Expose context tools through an MCP server
-- Use FastAPI endpoints for indexing and querying; MCP tools for risks and milestones
-- Provide a Streamlit interface for repository chat workflows
-- Route prompts to local LLM backends such as Ollama
+- Discovers local workspaces and safely indexes supported repository content.
+- Maintains chunk and vector artifacts with fingerprints for incremental indexing.
+- Retrieves top-ranked chunks, gates weak evidence, produces grounded answers, and returns source citations.
+- Preserves selected exact repository facts when they are present in accepted evidence.
+- Provides a FastAPI API, Streamlit repository/model selector and chat UI, persistent SQLite sessions, and MCP tools.
+- Supports safe repository refresh, GitHub-backed risks and milestones when credentials are supplied, and deterministic/live evaluation.
 
-## Project Structure
+## Architecture
+
+```mermaid
+flowchart LR
+    W[Local projects / GitHub sync] --> I[Safe indexer]
+    I --> V[Chunk store + vector store]
+    V --> R[Top-K retriever]
+    R --> G[Deterministic evidence gate]
+    G --> P[Grounded prompt + citations]
+    P --> H[HTTP: standalone LLM service]
+    H --> E[Engine router]
+    E --> O[Ollama local model]
+    H --> A[Grounded answer]
+    UI[Streamlit UI] --> API[FastAPI API]
+    API --> R
+    API --> S[SQLite session store]
+    MCP[MCP stdio server] --> R
+    EV[Evaluation tools] --> R
+```
+
+RAG, inference, and MCP remain separate. `rag/` calls the standalone LLM service over HTTP; it does not execute Ollama. The Streamlit UI calls the project API and does not execute Ollama.
+
+## Project structure
 
 ```text
-app.py                  FastAPI app for indexing and RAG queries
-app_processing/         File loading, filtering, chunking, and embeddings
-github/                 Repository sync and webhook helpers
-llm_service/            Local LLM inference service
-mcp/                    MCP JSON-RPC server and schemas
-rag/                    Retrieval, prompt building, metrics, risks, milestones
-ui/                     Streamlit frontend
-utils/                  MCP client, tests, and project fingerprint helpers
-vector_store/           FAISS vector store implementation
-evaluation/             Versioned RAG benchmark, synthetic fixtures, and reports
+app.py             FastAPI API, indexing, sessions, and operational endpoints
+app_processing/    loading, filtering, chunking, embeddings
+github/            repository sync and GitHub helpers
+rag/               retrieval, evidence gating, grounded-answer assembly
+vector_store/      FAISS/BM25-backed repository vector storage
+llm_service/       standalone inference API, engine router, Ollama engine
+ui/                Streamlit client
+evaluation/        versioned synthetic benchmark and diagnostics
+mcp/               JSON-RPC MCP server
+utils/             session store and shared helpers
+tests/             regression suite
+audit/             project audit scripts and criteria
 ```
 
-## Requirements
+## Windows setup
 
-- Python 3.10+
-- Ollama, if using local LLM inference
-- Dependencies listed in `requirements.txt`
+Requirements: Python 3.10+, a locally running Ollama installation for inference, and the packages in `requirements.txt`.
 
-## Setup
-
-```bash
+```powershell
 python -m venv venv
-venv\Scripts\activate
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+ollama serve
 ```
 
-Create a `.env` file for local configuration if needed. The `.env` file is intentionally ignored by git.
+Install the recommended validated model in another terminal if it is not already present:
 
-## Run The API
-
-```bash
-uvicorn app:app --host 127.0.0.1 --port 8000 --lifespan off
+```powershell
+ollama pull llama3.2:1b
 ```
 
-The main API starts from `app.py` and exposes repository indexing and RAG query endpoints.
-`--lifespan off` disables automatic workspace indexing. Submit `/index` explicitly.
-Indexing preserves source and documentation files. Repository IDs are single names,
-not paths. Git sync refuses dirty repositories, divergent histories, or updates that
-remove files; it never resets local changes. Apply such updates manually after review.
-
-## Run The Streamlit UI
-
-```bash
-streamlit run ui/streamlit_app.py
-```
-
-Use the sidebar to provide a repository ID and GitHub repository URL, rebuild the index, and ask questions about the project.
-
-## Run The LLM Service
-
-```bash
-uvicorn llm_service.server:app --host 127.0.0.1 --port 9001
-```
-
-The LLM service routes prompts to a configured local model backend.
-
-Set configuration in the ignored root `.env` or the process environment:
+Create an ignored `.env` only when configuration is needed. Never commit it. The release recommendation is `llama3.2:1b`; the source-code fallback when no value is set is `qwen2.5:7b`.
 
 ```dotenv
-LLM_DEFAULT_MODEL=qwen2.5:7b
-# Optional: choose an already installed local model suitable for your memory.
+# Optional local inference selection
+LLM_DEFAULT_MODEL=llama3.2:1b
 # LLM_FALLBACK_MODEL=llama3.2:1b
-LLM_TIMEOUT_SECONDS=120
-LLM_CLIENT_TIMEOUT_SECONDS=270
+
+# Optional API and RAG settings
+# LLM_API_URL=http://127.0.0.1:9001/generate
+# LLM_TIMEOUT_SECONDS=120
+# LLM_CLIENT_TIMEOUT_SECONDS=270
+# RAG_TOP_K=5
+# RAG_MAX_CONTEXT_CHARS=3000
+# RAG_MAX_SOURCES=3
+# RAG_EVIDENCE_MIN_SCORE=0.25
+# RAG_EVIDENCE_STRONG_SCORE=0.35
+# RAG_EVIDENCE_RELATIVE_SCORE=0.72
+# CHAT_HISTORY_TURNS=10
+# SESSION_DB_PATH=runtime/sessions.sqlite3
+
+# Optional GitHub integration; local RAG does not require this.
+# GITHUB_TOKEN=...
 ```
 
-The original default is retained. On this audit machine, `llama3.2:1b` worked where
-`qwen2.5:7b` could not load. The fallback is disabled unless configured. It runs only
-after model-unavailable or insufficient-memory failures and only if installed
-locally; it never downloads a model or selects a cloud model. An explicit `model`
-in `/generate` is always honored and disables fallback for that request.
+`LLM_FALLBACK_MODEL` is considered only for the configured service default after an unavailable-model or memory failure. A request with an explicit model never falls back. `CONTEXT_ASSIST_API_URL` optionally changes the Streamlit API target.
 
-Inference failures return `{"detail":{"code":"...","message":"..."}}` with
-503 for unavailable models/services or memory limits, 504 for timeouts, and 500
-for unexpected failures. `/ask` propagates these statuses instead of returning an
-error as an answer. Keep the client timeout above two engine attempts plus model
-discovery time if fallback is enabled. Restart services after changing configuration.
+## Start the services
 
-GitHub Milestones/Risks require `GITHUB_TOKEN` with access to the selected repository.
-Missing/invalid tokens produce clear configuration errors; they are never printed
-or committed, and invalid authentication is not retried anonymously. `/health/github`
-reports configuration presence only, not token validity. The UI derives owner/name
-from the entered GitHub URL.
+Start these in order from the repository root:
 
-MCP supports newline-delimited stdio `initialize`, `ping`, `tools/list`, `tools/call`,
-and notifications, while retaining existing `call/ask_project`, `call/rebuild_index`,
-`call/list_milestones`, and `call/risk_summary`. One-shot requests at EOF still work.
-Errors now use JSON-RPC error objects with the original request ID. Standard tool
-execution failures use `isError` content. Protocol references:
-[lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle),
-[tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools),
-[stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+```powershell
+# Terminal 1: Ollama backend (default port 11434)
+ollama serve
 
-Run deterministic regression tests without a live model or GitHub credentials:
+# Terminal 2: standalone inference service (port 9001)
+.\venv\Scripts\python.exe -m uvicorn llm_service.server:app --host 127.0.0.1 --port 9001
+
+# Terminal 3: Context Assist API (port 8000)
+.\venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000 --lifespan off
+
+# Terminal 4: Streamlit UI (default port 8501)
+.\venv\Scripts\python.exe -m streamlit run ui/streamlit_app.py
+```
+
+`--lifespan off` prevents automatic workspace indexing; use `POST /index` or the UI to index explicitly. The default ports are Ollama `11434`, LLM service `9001`, API `8000`, and Streamlit `8501`.
+
+## Health, readiness, and models
+
+- `GET /health` is API liveness and does not wait on dependencies.
+- `GET /ready` reports bounded dependency state for SQLite, vector storage, the LLM service, and GitHub configuration.
+- `GET /config` exposes safe operational settings only.
+- `GET /models` proxies locally available models from the standalone LLM service.
+- `GET /repositories` reports known repository/index state; `POST /repositories/{repo_id}/reindex` refreshes a selected repository.
+
+The LLM service exposes `GET /health`, `GET /models`, and `POST /generate`. It is `degraded` when it is alive but Ollama is unavailable. If the LLM service is unavailable, indexing, repository browsing, and sessions remain usable while inference returns its normal error status. Missing or invalid GitHub credentials block only GitHub-dependent functionality; local repository RAG does not require a token.
+
+Each API response has an `X-Request-ID`; clients may supply one. Logs record operational metadata such as request ID, action, status, and timing without logging prompts, repository chunks, credentials, or upstream error bodies. See [OPERATIONS.md](OPERATIONS.md) for diagnostics and recovery details.
+
+## Evaluation
+
+The version-controlled 15-case synthetic dataset checks retrieval, citations, refusal behavior, grounding constraints, and latency. It is useful for regression and local comparison, not universal production-accuracy evidence.
+
+```powershell
+# Deterministic pipeline validation; no live model required
+.\venv\Scripts\python.exe -m evaluation.runner --mode deterministic
+
+# One live-model run
+.\venv\Scripts\python.exe -m evaluation.runner --mode live --model llama3.2:1b
+
+# Same configuration across installed models
+.\venv\Scripts\python.exe -m evaluation.runner --mode live --models llama3.2:1b,mistral:latest
+
+# Service/backend/model preflight and one warm-up
+.\venv\Scripts\python.exe -m evaluation.diagnostics --model llama3.2:1b
+```
+
+Latest valid local live result for `llama3.2:1b`: 15/15 completed, Hit@5 `1.0000`, citation precision `0.8333`, unsupported-refusal accuracy `1.0000`, median inference latency about `834.6 ms`, and one lexical grounding mismatch. `mistral:latest` returned HTTP 500 during local warm-up after about 16.7 seconds, so it has no valid quality ranking. `llama3.2:1b` remains the validated local release recommendation.
+
+See [evaluation/README.md](evaluation/README.md) for metric definitions and report behavior. Run the regression suite with:
 
 ```powershell
 .\venv\Scripts\python.exe -X utf8 -m unittest discover -s tests -v
 ```
 
-The integration audit commands and remaining limitations are documented in
-`audit/PROJECT_AUDIT.md`. Architecture responses list observed repository files
-and explicitly state that file names alone cannot establish responsibilities or
-data flow. Sessions remember an explicitly selected repository in memory, allow
-explicit switching, and replace stale pending questions; no persistent chat storage
-has been added.
+## Limitations
 
-## Notes
+- Retrieval depends on the files successfully indexed from a repository.
+- Evidence gating reduces unsupported answers; it cannot mathematically guarantee no hallucinations.
+- Small local models can paraphrase or omit literals despite exact-fact preservation.
+- The benchmark is synthetic and small, and latency depends on installed models and local hardware.
+- GitHub features require valid credentials and repository access.
+- Citations and line ranges depend on the metadata available at indexing time.
 
-The answering flow now keeps retrieved evidence and citations together:
-repository -> chunking -> embeddings -> vector index -> retrieval -> bounded context
-and prompt builder -> separated inference API -> engine/model -> grounded answer
-with sources. Configure `RAG_TOP_K` (5), `RAG_MAX_CONTEXT_CHARS` (3000),
-`LLM_API_URL` (`http://127.0.0.1:9001/generate`) and the inference service's
-`LLM_DEFAULT_MODEL` as needed. See [RAG pipeline](rag/PIPELINE.md) for response
-fields, configuration, compatibility, tests and file-level citation limitations.
-
-The Streamlit product flow is **select repository → select model → ask → inspect
-Sources / Evidence**. Repository and model choices are validated through the API;
-the model selector only shows models reported by the separate inference service.
-The sidebar displays index status and offers a selected-repository-only refresh using
-the existing safe indexing pipeline. Chat turns are bounded in memory by
-`CHAT_HISTORY_TURNS` (default 10); **New Chat** clears turns while retaining the
-selected repository and model. See [UI controls](ui/CONTROLS.md) for API endpoints,
-status meanings, follow-ups, and persistence limits.
-
-Sessions now persist selected controls and visible chat turns in local SQLite across
-API restarts. Configure `SESSION_DB_PATH` if the default `runtime/sessions.sqlite3`
-does not suit deployment; runtime data remains ignored by Git. Use `/health` for API
-liveness, `/ready` for bounded dependency state, and `/config` for safe operational
-settings. [Operations](OPERATIONS.md) documents reset/delete behavior, degraded
-service behavior, correlation IDs, and the complete endpoint contract.
-
-Generated data such as virtual environments, caches, repository indexes, vector files, and local profiles are excluded from version control through `.gitignore`.
-
-Index fingerprints hash eligible relative paths and source content with SHA-256;
-timestamps alone never determine whether content changed. Ingestion and fingerprinting
-share source/ignore rules. Git interprets `.gitignore` rules, including for archives
-using disposable metadata outside the source directory. A matching fingerprint skips
-indexing only if the persisted vector artifacts load and validate; missing or corrupt
-artifacts are rebuilt without deleting source files. The repaired ingestion version
-causes an explicit reindex of older profiles once, then unchanged repositories skip.
-
-Source and profile text is read as strict UTF-8. Unicode is preserved, fenced code
-content is retained, and invalid UTF-8 is reported rather than silently discarded.
-Secret masking covers common JSON/config keys and known token signatures, but is
-not a guarantee of detecting every secret format. Risks now include only open issues;
-closed issues and pull requests are excluded from active risk summaries.
-
-The audit distinguishes `PASS`, code `FAIL`, and externally `BLOCKED` checks. A rejected
-GitHub credential remains blocked, never passed. Supply `GITHUB_TOKEN` securely through
-the ignored `.env` or process environment, restart services, and rerun the audit to
-verify live GitHub access. Do not paste or commit credentials into code or fixtures.
-
-## RAG evaluation
-
-The version-controlled synthetic benchmark in `evaluation/` measures retrieval Hit@K
-and MRR, file-level citation hit/precision, deterministic grounding constraints,
-unsupported-question refusal behavior, and latency. Run it without Ollama using
-`.\venv\Scripts\python.exe -m evaluation.runner --mode deterministic`. Optional
-`--mode live --model llama3.2:1b` uses the existing local embedding backend and
-separate inference service. Generated reports are ignored; see
-[`evaluation/README.md`](evaluation/README.md) for dataset fields, configuration
-comparisons, interpretation, and limitations.
+Generated indexes, session databases, reports, logs, virtual environments, and `.env` files are ignored by Git. [rag/PIPELINE.md](rag/PIPELINE.md) documents the response and evidence flow, and [OPERATIONS.md](OPERATIONS.md) covers running services.\n

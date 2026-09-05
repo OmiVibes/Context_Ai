@@ -87,8 +87,8 @@ before changing defaults. Accepted chunks alone enter the prompt. Returned citat
 deduplicate same-file chunks unless trusted source ranges differ, while allowing
 multiple files for multi-file answers.
 
-Live `llama3.2:1b` observations after the change: Hit@5 `1.0`, MRR `0.7963`, citation
-hit `1.0`, citation precision `0.8333`, and unsupported refusal accuracy `1.0` across
-15 cases. Exact lexical grounding was `0.6667`; the recorded mismatches were
-evidence-consistent paraphrases or omitted literal syntax, so they remain visible
-rather than being treated as model-quality improvements.
+Latest valid local live observation for `llama3.2:1b`: 15/15 cases completed, Hit@5
+`1.0`, MRR `0.7963`, citation hit `1.0`, citation precision `0.8333`, and
+unsupported-refusal accuracy `1.0`. Median inference latency was about `834.6 ms`;
+one lexical grounding mismatch remained visible. `mistral:latest` failed local warm-up
+with HTTP 500, so it was not ranked.\n
