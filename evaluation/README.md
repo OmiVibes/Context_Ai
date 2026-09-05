@@ -36,6 +36,20 @@ client. It writes no fixture index or repository data. Use `--top-k`,
 `--context-limit`, and `--model` to compare configurations without editing source.
 For example, compare `--top-k 3` and `--top-k 5` in separate saved report folders.
 
+Compare installed models with the same dataset and RAG configuration:
+
+```powershell
+.\venv\Scripts\python.exe -m evaluation.runner --mode live --models llama3.2:1b,mistral:latest
+```
+
+Live multi-model mode runs a quick preflight (service, backend, model availability)
+and one warm-up per model. Warm-up is reported separately and is excluded from
+case latency. A failed preflight prevents a misleading benchmark; a failed model is
+shown as incomplete while other models continue. Use
+`.\venv\Scripts\python.exe -m evaluation.diagnostics --model llama3.2:1b` to
+distinguish an unreachable service, unreachable Ollama backend, missing model,
+timeout, connection reset, and generation error before running RAG.
+
 Reports default to `evaluation/results/latest.json` and `latest.md`, which are
 ignored by Git. JSON contains per-case retrieval ranks, answer, sources, failure
 categories, and retrieval/inference/total latencies. Markdown presents aggregates.

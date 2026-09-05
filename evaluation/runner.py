@@ -203,14 +203,23 @@ def run(dataset_path: str | Path = DEFAULT_DATASET, fixtures_root: str | Path = 
 
 def run_models(models: list[str], **kwargs) -> dict:
     """Run isolated live reports; one unavailable model never hides other results."""
+    from evaluation.diagnostics import preflight, warmup
+    check = preflight(models)
     reports = {}
+    if check.get("error_category") in {"llm_service_unreachable", "ollama_unreachable"}:
+        return {"preflight": check, "models": {model: {"configuration": {"model": model}, "error": check["error_category"], "stage": "preflight"} for model in models}}
     for model in models:
+        if model in check["missing_models"]:
+            reports[model] = {"configuration": {"model": model}, "error": "model_unavailable", "stage": "preflight"}; continue
+        warm = warmup(model)
+        if not warm["success"]:
+            reports[model] = {"configuration": {"model": model}, "error": warm["category"], "stage": "warmup", "warmup": warm}; continue
         try:
-            reports[model] = run(mode="live", model=model, output_dir=None, **kwargs)
+            reports[model] = run(mode="live", model=model, output_dir=None, **kwargs); reports[model]["warmup"] = warm
         except Exception as exc:
             reports[model] = {"configuration": {"mode": "live", "model": model},
                               "error": f"{type(exc).__name__}: {exc}"}
-    return {"models": reports}
+    return {"preflight": check, "models": reports}
 
 
 def main() -> int:
