@@ -201,6 +201,18 @@ def run(dataset_path: str | Path = DEFAULT_DATASET, fixtures_root: str | Path = 
     return report
 
 
+def run_models(models: list[str], **kwargs) -> dict:
+    """Run isolated live reports; one unavailable model never hides other results."""
+    reports = {}
+    for model in models:
+        try:
+            reports[model] = run(mode="live", model=model, output_dir=None, **kwargs)
+        except Exception as exc:
+            reports[model] = {"configuration": {"mode": "live", "model": model},
+                              "error": f"{type(exc).__name__}: {exc}"}
+    return {"models": reports}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate Context AI retrieval, citations, refusals and grounding.")
     parser.add_argument("--mode", choices=("deterministic", "live"), default="deterministic")
@@ -209,8 +221,18 @@ def main() -> int:
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--context-limit", type=int)
     parser.add_argument("--model")
+    parser.add_argument("--models", help="Comma-separated live models to compare")
     parser.add_argument("--output-dir", default=str(ROOT / "results"))
     args = parser.parse_args()
+    if args.models:
+        if args.mode != "live": parser.error("--models requires --mode live")
+        report = run_models([value.strip() for value in args.models.split(',') if value.strip()],
+                            dataset_path=args.dataset, fixtures_root=args.fixtures_root,
+                            top_k=args.top_k, context_limit=args.context_limit)
+        from evaluation.report import write_model_comparison
+        write_model_comparison(report, args.output_dir)
+        print("multi-model evaluation: " + ", ".join(report["models"]))
+        return 0
     report = run(args.dataset, args.fixtures_root, args.mode, args.top_k, args.context_limit, args.model, args.output_dir)
     summary = report["summary"]
     print(f"{args.mode} evaluation: {summary['cases']} cases; Hit@{summary['retrieval']['k']}={summary['retrieval']['hit_at_k']}; failures={summary['failure_categories']}")
